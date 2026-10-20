@@ -1,8 +1,0 @@
-# Additional mount for the existing Compose service; no new permanent image.
-# Set SLY_CODE_DIR to the absolute code-repository path before using this file.
-services:
-  ece484:
-    volumes:
-      - type: bind
-        source: ${SLY_CODE_DIR:?Set SLY_CODE_DIR to this code repository}
-        target: /sly
