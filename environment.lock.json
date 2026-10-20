@@ -1,0 +1,23 @@
+{
+  "recorded_on": "2026-10-19",
+  "scope": "Source and configuration provenance; not a bit-for-bit container lock",
+  "environment_root": "/home/xinweiyu/Workspace/ECE484_Program",
+  "ubuntu": "24.04",
+  "ros": "Jazzy",
+  "gazebo": "Harmonic",
+  "python": "3.12 in the existing container",
+  "image_tag": "ece484:jazzy-harmonic-cu128",
+  "base_image_tag": "osrf/ros:jazzy-desktop-noble",
+  "image_digest": null,
+  "simulator": {
+    "repository": "https://github.com/UIUC-Robotics/gem_simulator",
+    "commit": "190e21da4394d4ce028d42d2fadf95a9b8eb1f47",
+    "local_patch": "patches/gem-simulator-jazzy-metapackages.patch"
+  },
+  "source_sha256": {
+    "Dockerfile": "8107184917382a19a123a44663745ee5e544b604a70c545e3b5dd5426a3ab4f4",
+    "compose.yaml": "8a21d81935acc7ef258c4ebc4ef2af26eea5a082e69f9741a63b9993d37f8f6a",
+    ".devcontainer/setup-venv.sh": "4f366de6ab21b618b67b3500ec755268efb7db0807e3fe552ae8469fb8f43176"
+  },
+  "large_dependencies_included": false
+}

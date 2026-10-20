@@ -1,0 +1,13 @@
+diff --git a/gem_gazebo/CMakeLists.txt b/gem_gazebo/CMakeLists.txt
+index e8cfde4..5341385 100644
+--- a/gem_gazebo/CMakeLists.txt
++++ b/gem_gazebo/CMakeLists.txt
+@@ -26,8 +26,6 @@ find_package(controller_manager REQUIRED)
+ find_package(controller_manager_msgs REQUIRED)
+ find_package(tf2_ros REQUIRED)
+ find_package(gz_ros2_control REQUIRED)
+-find_package(ros2_control REQUIRED)
+-find_package(ros2_controllers REQUIRED)
+ find_package(position_controllers REQUIRED)
+ find_package(velocity_controllers REQUIRED)
+ find_package(joint_state_broadcaster REQUIRED)
