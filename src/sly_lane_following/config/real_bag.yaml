@@ -1,0 +1,12 @@
+# Pixel-domain baseline; no camera height, lane width in metres, or extrinsics.
+roi_top: 0.54
+gray_min: 60
+saturation_max: 100
+contrast_min: 22
+candidate_span: 65
+near_row_min: 0.73
+common_span: 45
+reset_gap_s: 0.5
+switch_frames: 4
+
+init_frames: 8

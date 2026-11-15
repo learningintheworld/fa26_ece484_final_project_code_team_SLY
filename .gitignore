@@ -1,0 +1,11 @@
+/gem_ws/
+/build/
+/install/
+/log/
+/results/
+/.sly-local.env
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.db3
+*.mcap

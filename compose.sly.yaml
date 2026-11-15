@@ -1,0 +1,10 @@
+services:
+  ece484:
+    image: ${SLY_IMAGE:-ece484:jazzy-harmonic-cu128}
+    volumes:
+      - type: bind
+        source: ${SLY_DATA_DIR:-/mnt/Data/01_Projects/ECE484_GEMe4/data}
+        target: /data/gem
+        read_only: true
+        bind:
+          create_host_path: false

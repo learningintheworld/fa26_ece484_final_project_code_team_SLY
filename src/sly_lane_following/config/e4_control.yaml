@@ -1,0 +1,14 @@
+# Stationary centred reference and low-speed gains require field verification.
+reference_verified: false
+near_row: 0.85
+far_row: 0.64
+reference_near: 0.5
+reference_far: 0.5
+min_span_fraction: 0.08
+k_near: 0.65
+k_direction: 0.30
+smoothing_s: 0.12
+max_steering: 0.25
+steering_rate: 0.6
+speed: 0.2
+turn_slowdown: 2.0

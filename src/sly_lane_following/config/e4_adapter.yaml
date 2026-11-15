@@ -1,0 +1,8 @@
+# Populate only after supervised stationary/low-speed checks on this e4.
+hardware_verified: false
+max_speed: 0.2
+max_front_steering: 0.25
+deadman_button: 4
+stop_brake: null
+max_throttle: null
+speed_kp: null

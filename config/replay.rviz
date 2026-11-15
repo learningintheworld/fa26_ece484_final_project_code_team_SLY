@@ -1,0 +1,65 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Background Color: 32; 32; 32
+    Fixed Frame: os_lidar
+    Frame Rate: 30
+  Displays:
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Name: Front OAK RGB
+      Topic:
+        Value: /oak/rgb/image_raw
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+      Transport Hint: raw
+      Queue Size: 5
+    - Class: rviz_default_plugins/PointCloud2
+      Enabled: true
+      Name: Ouster points (sensor frame)
+      Topic:
+        Value: /ouster/points
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+      Queue Size: 5
+      Alpha: 1
+      Color Transformer: Intensity
+      Channel Name: intensity
+      Use rainbow: true
+      Autocompute Intensity Bounds: true
+      Position Transformer: XYZ
+      Style: Points
+      Size (Pixels): 2
+      Size (m): 0.03
+      Decay Time: 0
+      Selectable: true
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      Distance: 30
+      Focal Point:
+        X: 5
+        Y: 0
+        Z: 0
+      Pitch: 0.85
+      Yaw: 3.14
+      Target Frame: os_lidar
+Window Geometry:
+  Width: 1400
+  Height: 900
+  X: 40
+  Y: 40

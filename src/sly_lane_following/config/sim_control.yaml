@@ -1,0 +1,13 @@
+reference_verified: true
+near_row: 0.98
+far_row: 0.85
+reference_near: 0.5
+reference_far: 0.5
+min_span_fraction: 0.08
+k_near: 2.5
+k_direction: 0.30
+smoothing_s: 0.12
+max_steering: 0.55
+steering_rate: 0.6
+speed: 0.4
+turn_slowdown: 2.0
