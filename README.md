@@ -1,30 +1,90 @@
 # Team SLY — ECE484 GEM Final Project
 
-Current stage: **Milestone 3 image-based lane-following development**. The controller uses normalized image features, not a metric path or Pure Pursuit. Missing recorded camera-to-body TF does not block this mode. Vehicle installation/reference positions still require field verification.
+Current stage: **Milestone 3 monocular lane-following development**. An optional visual Pure Pursuit controller now projects observed lane centres into rear-axle ground coordinates using model-based camera geometry. The original image controller remains available. Official e4 installation geometry is the accepted nominal default; simulation uses its own e2 geometry.
 
-**Milestone 3 is not complete.** Camera-driven simulation and PACMod adapter code are implemented locally; continuous-turn and recorded-data acceptance are still under evaluation. No physical autonomous lane-following test has been performed in this work.
+**Milestone 3 is not complete.** The Highbay straight-and-combination-bend route has passed three independent simulation runs. Recorded-data acceptance and physical vehicle testing remain outstanding. No physical autonomous lane-following test has been performed in this work.
 
-[Project website](https://safeautonomy-illinois-students.github.io/fa26_ece484_final_project_site_team_SLY/) · [Course requirement](https://safeautonomy-illinois.github.io/ece484-site/fall-2026/projects/robotaxi/) · [中文启动与上车指南](MILESTONE3.md) · [本地试验报告](results/milestone3/report.md)
+[Project website](https://safeautonomy-illinois-students.github.io/fa26_ece484_final_project_site_team_SLY/) · [Course requirement](https://safeautonomy-illinois.github.io/ece484-site/fall-2026/projects/robotaxi/) · [中文启动与上车指南](MILESTONE3.md) · [本地试验报告](results/single_boundary/report.md)
 
-## 最新 Highbay 结果（2026-11-13）
+当前代码包含ENet车道识别、视觉Pure Pursuit、Highbay曲率预瞄调速及e4 PACMod启停准备。自适应速度仿真已完成一次独立整圈，到终点883.033秒；实车尚未验收。实车命令见 [E4_QUICKSTART_ZH.md](E4_QUICKSTART_ZH.md)。以下历史报告、数据、视频和模型权重位于本地Git忽略的 `results/`，不随本次代码提交上传；克隆仓库后需单独复制ENet权重。
 
-**未通过完整急弯及三次重复验收。** 3 个速度对照、9 组图像方向增益及 2 次超时重跑均保留；有效入弯试验在约 11.7–13.0 m 进度处丢失右边界或车体包络越界，规定路线为 49.07 m。降至 0.1 m/s 未消除问题。相机、检测与停车条件未放宽；默认仿真参数及 e4 配置保持原样。
+## ENet Highbay 整圈验证（2026-11-15）
+
+**现有 ENet v3 权重已完成一次独立整圈：137.55 m，1074.0 s，驾驶期间零失效控制帧，终点停稳。** 最小车身/轮胎包络余量 0.117 m；出弯仍有摆动，不能视为实车验收。
+
+新仿真配置 `src/sly_lane_following/config/highbay_enet.yaml` 使用 ENet 与当前 RGB 标线支持、近期观测身份关联和近场片段连接优先级。原 ENet 权重、Pure Pursuit、速度上限 0.2 m/s、请求前视 3.5 m，以及原 Highbay / e4 控制配置均未改变。两侧消失或真正选道歧义仍停车。141 项单元测试及隔离域故障停车检查通过。
+
+[本地完整报告](results/highbay_enet_v1/report.md) · [整圈录像](results/highbay_enet_v1/row_identity_attempt_16/repeat_1/closed_loop_h264.mp4) · [独立验收](results/highbay_enet_v1/row_identity_attempt_16/qualification.json) · [轨迹与余量](results/highbay_enet_v1/row_identity_attempt_16/evaluation.png)
+
+```bash
+./scripts/dev.sh exec python scripts/highbay_repeat.py --route full-lap --repeats 1 --speed 0.2 --lookahead 3.5 --perception-config src/sly_lane_following/config/highbay_enet.yaml --output results/my_enet_full_lap
+```
+
+输出目录需未存在；本入口会独立启动并停止仿真。模型权重在 Git 忽略的 `results/enet_real_v3/training/best.pth`，换电脑须另行提供同一权重。先用故障 PNG 窗口和局部闭环定位问题，再执行完整验证；所有失败记录保留。此次仅本地修改。
+
+## 整圈与提速验证（OpenCV 基线，2026-11-15）
+
+**0.2 m/s、请求前视 3.5 m：一次独立整圈通过。** 近场边界身份、片段几何和历史车道宽度联合过滤已修复原 55.69 m 选道问题。连续完成 137.55 m，耗时 1076.6 s，最小车身/轮胎余量 0.0985 m，无无效控制帧或中途重新启用，终点停稳。
+
+同一冻结版本的 **0.3 m/s 提速尝试未通过**：在 42.87 m 因可靠单侧片段支持不足停车，未越界。默认仍为 0.2 m/s，不降低可靠性门槛。88 项单元测试与 ROS 故障停车检查通过。详细失败记录、录像和复现命令见 [本地报告](results/nearfield/report.md) · [整圈录像](results/nearfield/full_speed_020_v2/repeat_1/closed_loop_h264.mp4) · [轨迹图](results/nearfield/full_speed_020_v2/full_lap.png)。这不是实车验收。
+
+## 此前 49 m 组合弯三次验证
+
+**固定源码和参数，三次独立重启全部通过完整路线。** 采用可靠的当前单侧标线、历史双边界测得的宽度及 Pure Pursuit；速度上限 0.2 m/s，前视距离 3.5 m。路线约 49.07 m，包含完整右侧组合弯及出口直行至少 3 m。
+
+| 独立运行 | 进度 m | 耗时 s | 最小车身余量 m | 无效控制帧 |
+|---|---:|---:|---:|---:|
+| 1 | 49.09 | 437.8 | 0.098 | 0 |
+| 2 | 49.09 | 437.8 | 0.098 | 0 |
+| 3 | 49.09 | 437.8 | 0.097 | 0 |
+
+各次均在终点停稳，无中途重新启用。车身与轮胎包络均在车道内；最小余量接近 0.10 m，不能据此推断实车裕量。两侧都不可见、近处候选矛盾或输入过期仍停车锁定。
+
+实现还修复了官方仿真驱动启动时轮 TF 尚未到达、轮距误读为零的问题，采用等待真实 TF 的薄包装；上游模型、相机与物理参数未改变。
+
+[完整本地报告](results/single_boundary/report.md) · [三次验证记录](results/single_boundary/qualification_v1/qualification.json) · [轨迹与余量图](results/single_boundary/qualification_v1/qualification.png) · [第 1 次完整录像](results/single_boundary/qualification_v1/repeat_1/closed_loop_h264.mp4)
+
+单包构建和普通分终端运行见 [操作指南](MILESTONE3.md)。独立重复脚本会自行启动和停止各次仿真；先关闭现有项目仿真、感知和适配器，使用新输出目录：
+
+```bash
+./scripts/dev.sh build
+./scripts/dev.sh exec python scripts/highbay_repeat.py --lookahead 3.5 --output results/single_boundary/my_repeats
+```
+
+76 项单元测试与 ROS 故障联调通过。单侧功能仅在 Highbay 配置中启用；真实数据回归和实车闭环仍未验收，e4 执行器继续保持观察模式。全部实验产物均在 Git 忽略的 `results` 中。
+
+## 此前双边界 Pure Pursuit 结果（2026-11-14）
+
+**该旧版本当时未通过完整路线或三次重复验收。** 0.2 m/s 上限、4.0/4.5/5.0 m 前视测试在约 9.70/10.02/10.41 m 处因双边界支持不足停车；对应最小车身余量为 0.62/0.55/0.46 m。第三组包含一个已修复的标线片段合并问题，原失败记录保留。完整路线仍为 49.07 m，不能把这三组失败试验称作三次通过。
+
+新代码、全段 3,870 帧真实数据回归、259 张未标注照片与实验录像见 [本地 Pure Pursuit 报告](results/pure_pursuit/report.md)。真实数据连续跟踪约 20.5 s 后锁定失效，总覆盖率仅 7.21%；没有达到验收要求。该阶段照片只做了固定划分；后续真实 RGB 网络标签、训练和回归见文末。
+
+- 仿真感知/控制入口：`./scripts/dev.sh lane-sim-pp`（替换 `lane-sim`，其他终端不变）。
+- bag 中仅观察 e4 名义投影：`./scripts/dev.sh lane-pp`；不启动执行器适配器。
+- 重跑全段：`./scripts/dev.sh lane-offline --output results/pure_pursuit/my_review --control-config src/sly_lane_following/config/e4_pure_pursuit.yaml --export-dataset`。
+历史仿真对应各结果目录中的源码快照；当前完整路线使用本页顶部的新命令。
+
+以上为双边界旧版本的失败基线。最新单侧仿真结果见本页顶部；原始记录保留。
+
+## 此前 Highbay 结果（2026-11-13）
+
+**该旧版本当时未通过完整急弯及三次重复验收。** 3 个速度对照、9 组图像方向增益及 2 次超时重跑均保留；有效入弯试验在约 11.7–13.0 m 进度处丢失右边界或车体包络越界，规定路线为 49.07 m。降至 0.1 m/s 未消除问题。相机、检测与停车条件未放宽；默认仿真参数及 e4 配置保持原样。
 
 控制器新增可选 `direction_mode: tangent` 与诊断字段，所有实验参数只保存在对应结果目录。完整录像、轨迹、静止视野对照和复现命令见 [Highbay 实验报告](results/highbay_control/report.md)。
 
 ## 当前实现
 
-- One package: `src/sly_lane_following`. `core.py` handles paint candidates, left/right identities, optical-flow-assisted association and corridor selection; `control.py` converts near/far image errors to speed/front-wheel steering requests.
+- One package: `src/sly_lane_following`. `core.py` handles paint candidates, left/right identities, optical-flow-assisted association and corridor selection; `control.py` retains image-error control; `geometry.py` provides ground projection and visual Pure Pursuit without importing MP workspaces.
 - `node.py` shares the detector with offline analysis. `adapter.py` is the single final command outlet, separately enabled and latched off after faults. It provides Gazebo and PACMod modes; hardware defaults to **observe-only** with unverified configuration.
-- RGB and CameraInfo are the perception inputs. No MP workspace import, vehicle TF, LiDAR/GNSS/IMU fusion or stored-waypoint steering is used.
-- Both boundaries must have current evidence. Identity memory does not count as an observed centreline. Ambiguity, stale input or missing feedback stops control; fresh input alone does not re-enable motion.
+- RGB and CameraInfo are the perception inputs. No MP workspace import, recorded vehicle TF, LiDAR/GNSS/IMU fusion or stored-waypoint steering is used; Pure Pursuit uses configured nominal camera geometry.
+- Highbay may use one reliably observed boundary and a previously verified lane width. Both boundaries missing or ambiguous usable sides invalidate control; old centreline points are never replayed as current observations. Ambiguity, stale input or missing feedback stops control; fresh input alone does not re-enable motion.
 - Simulator and e4 configuration are separate. The current simulator is the official **e2 model**, not an e4 vehicle-parameter validation.
 
 | Topic | Meaning |
 |---|---|
 | `/sly/lane/debug_image` | Timestamped candidates, selected boundaries, pixel centreline, control/reference points |
 | `/sly/lane/status` | Visual validity and image-space control diagnostics; score is heuristic, not probability |
-| `/sly/lane/local_path` | Always empty; `NOT_USED_IMAGE_SERVO`. Pixels are never presented as metres |
+| `/sly/lane/local_path` | Pure Pursuit: metric centreline from current boundaries (single-side centres use historical width) in `sly_rear_axle_ground`; invalid input or legacy image mode: empty |
 | `/sly/control/request` | `AckermannDriveStamped`: requested m/s and front-wheel radians |
 | `/sly/control/status` | Final outlet state and stop reason |
 | `/sly/control/enable` | `SetBool`; explicit enable / latched stop |
@@ -250,3 +310,63 @@ launch log, capture script and sensor/odometry timestamps. The new recording use
 the original GEM model and Sonoma geometry; the added fixed observer camera is
 only for visualization. The recording and the new website remain local pending
 team review.
+
+## 真实 RGB 急弯回归（2026-11-15）
+
+真实配置已启用逐列补充扫描、分段拟合及保守的 e4 单侧推算；Pure Pursuit 和已通过的 Highbay 配置保持不变。3,870 帧完整回放中，明确双边界参考帧的候选匹配由 63/75 提升到 68/75；约 23.935 秒触发单侧 3 秒时限并锁定停止，**尚未通过全段连续跟随**。单侧误差只验证名义模型下一部分可对照的目标，不代表实车精度。
+
+[本地报告与复现命令](results/real_transfer_v1/report.md) · [完整前后对比视频](results/real_transfer_v1/before_after.mp4) · [单侧检查](results/real_transfer_v1/masked_side_checks.json)。结果目录不提交 Git；本轮未微调 MP1，实车仍仅观察。
+
+
+## 真实 RGB 神经网络主研究入口（本地实验）
+
+现用ENet v3：修复训练标签与推理ROI不一致，补充12张人行道、路缘等局部背景照片。共126张训练、20张验证、25张评估；沿用MP1结构和v2权重微调。留出评估IoU为85.12%（v2：83.78%），远场IoU为67.15%（v2：62.71%）；近场略降。模型只生成掩膜，当前车道仍由几何与身份关联选择。
+
+ENet v3原基线在23.935秒触发原单侧时限，候选双边界匹配69/75（v2：70/75）。本次仅改进历史宽度和边界重新关联，**全段连续跟随仍未完成**；最新结果见下节。Pure Pursuit、e4原有控制参数及Highbay配置保持不变，两侧不可见或真实歧义时继续停车。
+
+- [ENet v3训练报告](results/enet_real_v3/report.md) · [129秒前后对照录像](results/enet_real_v3/full_comparison.mp4) · [23.935秒掩膜对比](results/enet_real_v3/compare_23.935_masks.jpg) · [旧版报告](results/enet_real_v2/report.md)。
+- `./scripts/dev.sh lane-offline-enet --reference results/stage2/reference/reference.json --output results/enet_real_v3/replay_again`：全段离线分析，输出目录须为新目录。
+- 回放三个终端：`./scripts/dev.sh replay`、`./scripts/dev.sh lane-enet`、`./scripts/dev.sh lane-view`；空格播放/暂停，分别Ctrl+C停止。避免同时启动其他感知节点。
+- 原OpenCV比较入口和仿真入口不变；网络入口使用已有venv和CUDA PyTorch，运行不导入MP工作空间。源码、训练和评估来源见报告。
+- 标签、权重、逐帧记录及视频均在Git忽略的 `results`；本轮只做本地修改，未提交或上传GitHub。
+
+历史诊断：[23.935秒停止根因](results/single_timeout_v1/report.md)。新模型消除了该帧的远处人行道误检，但左边界退出视野及历史宽度有效性仍是独立问题；没有把该误检当作单侧超时的原因。
+
+
+### 历史宽度与单侧续行更新（2026-11-15，本地预览）
+
+保持ENet v3、Pure Pursuit及Highbay配置不变，仅在e4几何配置启用 `quality_width_history`：短残线不刷新历史宽度；保持当前右边界身份，返回左边界连续8帧确认后重新关联；单侧续行同时检查当前观测与名义误差预算。原3秒/0.6米阈值保留给旧策略，新策略并非单独延长时限。
+
+完整3,870帧回放：23.935秒不再停止，31.702秒接回左边界，31.4–33秒连续有效；有效路径预览由382帧增至764帧（9.87%→19.74%）。**36.668秒误差预算超过0.25米后停止锁定，尚未完成全段连续跟随。** 预算是名义模型下的工程敏感度估计，不能视为实车误差保证。连续单侧试验有486个可比较目标，最大差异0.205米；另624个有效目标缺少参照，不能算作精度验证通过。
+
+[本次报告](results/width_tracking_v1/report.md) · [129秒完整对比](results/width_tracking_v1/full_comparison.mp4) · [23.935秒对照](results/width_tracking_v1/compare_23.935.jpg)。上面的三终端回放命令仍适用；新离线输出可用 `./scripts/dev.sh lane-offline-enet --reference results/stage2/reference/reference.json --output results/width_tracking_v1/replay_again`（目录须不存在）。本轮125项测试通过、包构建通过，260帧仿真回归输出一致；未运行新的闭环整圈，未上传GitHub。
+
+
+### 36.668秒预算超限修复（本地回放）
+
+最新宽度估计仅使用最近可观测走廊的法向测量，避免远处弯开的线段污染历史宽度。预算、ENet、Pure Pursuit、e4与Highbay配置均未修改。36.668秒预算由0.2502米降至0.1496米，完整3,870帧回放已越过该点；有效预览764→778帧。**37.134秒仍因当前边界无法支持允许范围内的前视目标而停车，尚未全段通过。** 128项测试、构建和260帧仿真样本保护检查通过，未运行新闭环整圈、未上传GitHub。
+
+[本次根因与验证报告](results/width_tracking_v2/report.md) · [完整前后录像](results/width_tracking_v2/full_comparison.mp4) · [下一停止点](results/width_tracking_v2/next_stop.json)。复现：`./scripts/dev.sh lane-offline-enet --reference results/stage2/reference/reference.json --output results/width_tracking_v2/replay_again`，输出目录须不存在。误差验证仍是名义模型和部分可比较样本，不能作为实车精度保证。
+
+
+### 37.134秒目标支持诊断（未采用实验）
+
+原图、ENet与边界ID检查表明，右线仍可见但近场左界缺失；按固定名义几何，37.134秒局部RGB参考最近中心目标约6.025–6.041米，超过当前6.0米范围，随后继续增大。试验修正了图像边缘截断截面的中点偏差，但完整回放停车反而提前至36.970秒，未达到采用条件，已撤回。**正式算法、ENet、Pure Pursuit与Highbay配置保持原样，仍在37.134秒停车，未实现全段连续跟随。** 恢复后重新读取3,870帧，候选和控制输出与上一版本逐项一致；128项测试与构建通过。
+
+[完整诊断和未采用原因](results/target_support_v1/report.md) · [原图与掩膜](results/target_support_v1/frames/37.134_comparison.jpg) · [全段实验对照](results/target_support_v1/full_comparison.mp4)。回放的转向输出无法改变已经录制的车辆姿态，后续需用闭环验证是否能在丢视野前保持车道；本轮未扩大目标范围或上传GitHub。
+
+
+### Highbay 自适应速度整圈验证（本地，2026-11-15）
+
+保持ENet与Pure Pursuit转向不变，新增可选曲率预瞄调速及加速度/加加速度限制。直线上限1 m/s，单侧观测及急弯继续低速。局部测试后完成1次独立整圈：到终点883.033秒，停稳893.008秒，较旧版包含停稳时间缩短16.9%；最小车身/轮胎余量0.1165米，无故障停车。仅验证仿真，e4配置未变，未上传GitHub。
+
+```bash
+./scripts/dev.sh exec python scripts/highbay_repeat.py --route full-lap --repeats 1 --speed 0.2 --lookahead 3.5 --adaptive-speed --perception-config src/sly_lane_following/config/highbay_enet.yaml --output results/speed_profile_v1/reproduce_01
+```
+
+输出目录须不存在；`--speed 0.2` 保留旧弯道/单侧基准，自适应开关另行启用1 m/s直线上限。无开关时保留原行为。[完整报告及舒适性指标](results/speed_profile_v1/report.md) · [完整录像](results/speed_profile_v1/full_lap_03/repeat_1/closed_loop_h264.mp4)。
+
+
+### GEM e4 实车移植准备
+
+见 [按终端操作的精简中文指南](E4_QUICKSTART_ZH.md)。ENet与Pure Pursuit不变；补齐SLY的PACMod制动/换挡/退出确认流程，官方驱动不改。实车速度配置仍为0.2 m/s上限，未验证硬件参数仍为空；先只观察，现场验证后才闭环。

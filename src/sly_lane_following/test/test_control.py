@@ -128,3 +128,13 @@ def test_tangent_mode_respects_reference_and_steering_sign():
 
 def test_unknown_direction_mode_is_rejected():
  with pytest.raises(ValueError):ImageServo({**CFG,'direction_mode':'world_heading'})
+
+
+def test_three_fragments_form_a_chain_not_a_branch():
+ d=LaneDetector()
+ a=boundary(1,300,270,y_min=300,y_max=400)
+ b=boundary(2,320,296,y_min=380,y_max=460)
+ c=boundary(3,340,320,y_min=450,y_max=520)
+ merged=d.join_fragments([a,b,c])
+ assert len(merged)==1
+ assert merged[0]['y_min']==300 and merged[0]['y_max']==520

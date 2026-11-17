@@ -53,7 +53,7 @@ try:
  assert all(v==0 for _,v in commands[-5:])
  tests.append(dict(fault='competing_publisher',stopped=True,remained_disarmed=True))
  enable(False)
- out=Path('results/milestone3/ros_gate_check.json');out.write_text(json.dumps(dict(passed=True,tests=tests),indent=2));print(out.read_text())
+ out=Path(os.environ.get('SLY_TEST_REPORT','results/milestone3/ros_gate_check.json'));out.write_text(json.dumps(dict(passed=True,tests=tests),indent=2));print(out.read_text())
 finally:
  os.killpg(p.pid,signal.SIGINT)
  try:p.wait(timeout=5)

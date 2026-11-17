@@ -19,6 +19,7 @@ from rclpy.serialization import deserialize_message
 from sensor_msgs.msg import CameraInfo, Image
 
 from .core import LaneDetector
+from .geometry import VisualPurePursuit
 
 
 def stamp(message):
@@ -82,16 +83,29 @@ def main(argv=None):
     p.add_argument('--start',type=float,default=0.,help='Explicit new perception session at this bag time; not continuous recovery')
     p.add_argument('--end',type=float,default=float('inf'))
     p.add_argument('--no-video',action='store_true')
+    p.add_argument('--control-config',type=Path,help='Optional geometry/control preview; never publishes commands')
+    p.add_argument('--export-dataset',action='store_true',help='Export clean 2 Hz images and fixed split manifest; no automatic ground-truth labels')
     args=p.parse_args(argv)
     bag=args.bag.resolve();out=args.output.resolve()
     if out==bag or bag in out.parents:raise ValueError('Output must not be inside the read-only bag')
     out.mkdir(parents=True,exist_ok=True)
     if (out/'frames.jsonl').exists():raise FileExistsError('Choose a new output directory; previous results are preserved')
     config=yaml.safe_load(args.config.read_text());detector=LaneDetector(config)
+    controller=VisualPurePursuit(yaml.safe_load(args.control_config.read_text())) if args.control_config else None
+    dataset=[];next_export=0.;metric_count=0
+    if args.export_dataset:(out/'dataset/images').mkdir(parents=True,exist_ok=True)
     provenance=out/'provenance';provenance.mkdir(exist_ok=True)
-    for module in ('core.py','offline.py'):
+    for module in ('core.py','offline.py','geometry.py'):
         shutil.copyfile(Path(__file__).with_name(module),provenance/module)
+    if config.get('mask_backend') == 'enet':
+        for module in ('neural.py', 'simple_enet.py'):
+            shutil.copyfile(Path(__file__).with_name(module), provenance/module)
+        checkpoint = Path(config['enet_checkpoint']).expanduser().resolve()
+        (provenance/'model.json').write_text(json.dumps(dict(
+            checkpoint=str(checkpoint), sha256=hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+            threshold=0.5, preprocessing='gray_letterbox_640x384_v1'), indent=2))
     shutil.copyfile(args.config,provenance/'config.yaml')
+    if args.control_config:shutil.copyfile(args.control_config,provenance/'control.yaml')
     references={}
     if args.reference:
         references={int(f['second']):f for f in json.loads(args.reference.read_text())['frames']}
@@ -105,6 +119,22 @@ def main(argv=None):
                 if relative<args.start:continue
                 if relative>args.end:break
                 result=detector.process(image,camera,ts);debug=result.pop('debug_image')
+                if controller:
+                    control=controller.compute(result,image.shape,ts,camera)
+                    result['control']=control
+                    result.update({k:control[k] for k in ('metric_valid','metric_reason','metric_path')})
+                    metric_count+=int(control['metric_valid'])
+                    cv2.rectangle(debug,(0,29),(debug.shape[1],57),(0,0,0),-1)
+                    cv2.putText(debug,'E4 NOMINAL MODEL | '+control['metric_reason'],(10,47),cv2.FONT_HERSHEY_SIMPLEX,.45,(255,255,255),1)
+                    if control['valid']:cv2.circle(debug,tuple(int(v) for v in control['target_pixel']),6,(255,0,255),2)
+                if args.export_dataset and relative>=next_export:
+                    clean=cv2.remap(image,*detector.maps,cv2.INTER_LINEAR)
+                    path=out/'dataset/images'/f'{len(dataset):04d}.png';cv2.imwrite(str(path),clean)
+                    data_split='train' if relative<75 else 'gap' if relative<80 else 'validation' if relative<100 else 'gap' if relative<105 else 'evaluation'
+                    dataset.append(dict(image=str(path.relative_to(out/'dataset')),relative_s=relative,stamp_ns=ts,split=data_split,
+                                        camera=camera,raw_sha256=hashlib.sha256(image.tobytes()).hexdigest(),
+                                        preprocessing='undistorted at original resolution; no overlays/cropping',label_status='unlabeled'))
+                    next_export+=.5
                 split='tune' if relative<60 else 'gap' if relative<70 else 'validation' # historical split, now regression only
                 result.update(relative_s=relative,split=split)
                 counts[split]+=1;valid[split]+=int(result['vision_valid']);reasons[result['reason']]+=1
@@ -171,11 +201,13 @@ def main(argv=None):
         validation_boundary_error_px_mean=float(np.mean(errors)) if errors else None,
         wrong_corridor_proxy=wrong,accepted_nonclear=nonclear,
         validation_unassessable=unassessable,
-        metric_valid=False,metric_reason='NOT_USED_IMAGE_SERVO',
+        metric_valid_frames=metric_count,metric_reason='OFFICIAL_E4_NOMINAL_PREVIEW' if controller else 'NOT_USED_IMAGE_SERVO',
         config=config,config_sha256=hashlib.sha256(args.config.read_bytes()).hexdigest(),
         core_sha256=hashlib.sha256(Path(__file__).with_name('core.py').read_bytes()).hexdigest(),
         reference_sha256=hashlib.sha256(args.reference.read_bytes()).hexdigest() if args.reference else None,
         opencv=cv2.__version__,numpy=np.__version__,video_backend=video_backend,review_required=True)
+    if args.export_dataset:
+        (out/'dataset/manifest.json').write_text(json.dumps(dict(frames=dataset,split_basis='bag message time',labels='not ground truth; masks require separate visual annotation',evaluation_scope='known capture, not independent scene generalization'),indent=2))
     (out/'summary.json').write_text(json.dumps(summary,indent=2))
     (out/'reference_evaluation.json').write_text(json.dumps(ref_results,indent=2))
     print(json.dumps({k:summary[k] for k in ('frames','coverage','validation_reference_coverage','processing_ms_p95','metric_reason')}))

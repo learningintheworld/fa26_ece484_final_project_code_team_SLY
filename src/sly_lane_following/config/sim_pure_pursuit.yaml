@@ -1,0 +1,28 @@
+controller: pure_pursuit
+# gem_simulator gem.urdf.xacro: rear x=-0.87, front x=0.88, camera=(0.394,0,1.19) in base_link.
+# Wheel contact is z=-0.446 in base_link. No track pose/truth is used.
+camera_xyz_rear: [1.264, 0.0, 1.636]
+camera_rpy: [0.0, 0.0, 0.0]
+geometry_source: official_simulator_wheel_contact_plane
+wheelbase: 1.75
+lookahead_m: 3.5
+max_projection_m: 30.0
+min_span_fraction: 0.08
+smoothing_s: 0.12
+max_steering: 0.55
+steering_rate: 0.6
+speed: 0.2
+turn_slowdown: 2.0
+
+# Width is learned from dual RGB observations, never from simulator geometry.
+allow_single_boundary: true
+width_init_frames: 8
+width_mad_max_m: 0.15
+width_change_max_m: 0.3
+center_agreement_m: 0.25
+boundary_range_m: 12.0
+# Fixed-width Highbay only; a long curve may keep its inner boundary outside FOV.
+# Distance bound integrates the configured speed cap, not route ground truth.
+single_max_s: 400.0
+single_max_distance_m: 70.0
+single_speed_scale: 0.75

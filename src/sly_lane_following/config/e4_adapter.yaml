@@ -6,3 +6,5 @@ deadman_button: 4
 stop_brake: null
 max_throttle: null
 speed_kp: null
+# Separate electronic brake command for gear changes; must be field verified.
+shift_brake: null

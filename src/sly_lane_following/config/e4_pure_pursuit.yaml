@@ -1,0 +1,45 @@
+controller: pure_pursuit
+# Official e4 URDF accepted as the nominal installation. Not a measurement.
+# rear axle x=-1.2904; ground z=-0.268; oak_joint=(0.535,0,1.683), rpy=0.
+# Luxonis humble depthai_macro: RGB origin zero; optical RPY=(-pi/2,0,-pi/2).
+# https://github.com/luxonis/depthai-ros/blob/humble/depthai_descriptions/urdf/include/depthai_macro.urdf.xacro
+# No device EEPROM offsets were recorded; use the official nominal RGB origin.
+camera_xyz_rear: [1.8254, 0.0, 1.951]
+camera_rpy: [0.0, 0.0, 0.0]
+geometry_source: official_e4_and_depthai_nominal_no_eeprom
+wheelbase: 2.565
+lookahead_m: 4.5
+max_projection_m: 30.0
+min_span_fraction: 0.08
+smoothing_s: 0.12
+max_steering: 0.25
+steering_rate: 0.6
+speed: 0.2
+turn_slowdown: 2.0
+
+# Real-data preview: normal-width geometry; legacy bounds retained below.
+# Nominal projection is not a measured ground-truth calibration.
+allow_single_boundary: true
+width_init_frames: 8
+width_mad_max_m: 0.15
+width_change_max_m: 0.3
+center_agreement_m: 0.25
+boundary_range_m: 12.0
+# Legacy policy limits; quality_width_history uses the observed error budget.
+single_max_s: 3.0
+single_max_distance_m: 0.6
+single_speed_scale: 0.75
+# The nominal camera cannot observe a straight ground target at 4.5 m.
+# Clamp only to a CURRENT observed endpoint; never extrapolate.
+single_target_clamp_m: 1.5
+
+# Real-data corridor experiment. Pure Pursuit gains/geometry above are unchanged.
+# Budget is nominal-model sensitivity, not a calibrated physical confidence bound.
+quality_width_history: true
+width_history_frames: 180
+width_min_arc_m: 1.5
+width_min_span_px: 70.0
+width_radius_floor_m: 0.10
+width_drift_mps: 0.02
+single_error_budget_m: 0.25
+reacquire_frames: 8

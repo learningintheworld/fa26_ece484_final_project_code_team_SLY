@@ -2,7 +2,7 @@
 roi_top: 0.54
 gray_min: 60
 saturation_max: 100
-contrast_min: 22
+contrast_min: 35
 candidate_span: 65
 near_row_min: 0.73
 common_span: 45
@@ -10,3 +10,9 @@ reset_gap_s: 0.5
 switch_frames: 4
 
 init_frames: 8
+
+# Real shallow bends: complement the existing row detector.
+column_scan: true
+fit_mode: piecewise
+column_span: 24
+candidate_arc: 80

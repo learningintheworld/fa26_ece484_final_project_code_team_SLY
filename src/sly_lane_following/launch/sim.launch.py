@@ -22,6 +22,19 @@ def generate_launch_description():
                               'gz_version':'8','on_exit_shutdown':'true'}.items()),
         Node(package='ros_gz_bridge',executable='bridge_node',parameters=[{'config_file':str(gazebo/'config/gz_bridge.yaml')}]),
         Node(package='ros_gz_image',executable='image_bridge',arguments=['/camera/image_raw']),
-        IncludeLaunchDescription(PythonLaunchDescriptionSource(str(gazebo/'launch/gem_vehicle.launch.py')),
-            launch_arguments={k:LaunchConfiguration(k) for k in ('x','y','yaw')}.items()),
+        # Same official description, spawn and ros2_control controllers. Only
+        # the Ackermann driver's TF startup wait is replaced.
+        IncludeLaunchDescription(PythonLaunchDescriptionSource(str(Path(share('gem_description'))/'launch/gem_description.launch.py')),
+            launch_arguments={'use_sim_time':'true','start_rviz':'false'}.items()),
+        Node(package='ros_gz_sim',executable='create',arguments=[
+            '-topic','robot_description','-name','gem','-allow_renaming','false',
+            '-x',LaunchConfiguration('x'),'-y',LaunchConfiguration('y'),'-z','0.3',
+            '-Y',LaunchConfiguration('yaw')],parameters=[{'use_sim_time':True}]),
+        Node(package='controller_manager',executable='spawner',arguments=[
+            'joint_state_broadcaster','left_steering_controller','right_steering_controller',
+            'left_front_wheel_controller','right_front_wheel_controller',
+            'left_rear_wheel_controller','right_rear_wheel_controller']),
+        Node(package='sly_lane_following',executable='sim_ackermann',name='ackermann_controller',
+            parameters=[{'cmd_timeout':.5,'use_sim_time':True},
+                        str(gazebo/'config/gem_ackermann_control_params_ros2.yaml')]),
     ])

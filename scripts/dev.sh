@@ -20,7 +20,11 @@ Usage: ./scripts/dev.sh COMMAND [arguments]
   lane [ROS args]     Run perception on replayed RGB + CameraInfo
   lane-view           View the pixel-domain debug image
   sim [launch args]   Launch Highbay with the existing simulator overlay
-  lane-sim [ROS args] Image servo on the simulated RGB camera
+  lane-sim [ROS args] Original image-servo baseline on simulated RGB
+  lane-sim-pp [args]  Visual Pure Pursuit on simulated RGB
+  lane-pp [args]      E4 nominal-geometry preview on replay; no actuator outlet
+  lane-enet [args]    Optional fine-tuned ENet replay preview, existing Python venv
+  lane-offline-enet   Full offline ENet analysis (arguments accepted)
   adapter [ROS args]  Simulation command outlet (starts disarmed)
   enable | stop      Explicitly arm / latch stop
   lane-reset         Reset perception after a stopped, aligned restart
@@ -85,10 +89,26 @@ if [[ "${1:-}" == "_inside" ]]; then
       export GZ_PARTITION=sly_highbay_m3
       exec ros2 launch sly_lane_following sim.launch.py "$@"
       ;;
-    lane-sim)
+    lane-offline-enet)
+      exec python -m sly_lane_following.offline --bag "$bag" \
+        --config "$repo_root/src/sly_lane_following/config/real_enet.yaml" \
+        --control-config "$repo_root/src/sly_lane_following/config/e4_pure_pursuit.yaml" "$@"
+      ;;
+    lane-enet)
+      exec python -m sly_lane_following.node --ros-args -p use_sim_time:=true \
+        -p config:="$repo_root/src/sly_lane_following/config/real_enet.yaml" \
+        -p control_config:="$repo_root/src/sly_lane_following/config/e4_pure_pursuit.yaml" "$@"
+      ;;
+    lane-pp)
+      exec ros2 run sly_lane_following lane_node --ros-args -p use_sim_time:=true \
+        -p control_config:="$repo_root/src/sly_lane_following/config/e4_pure_pursuit.yaml" "$@"
+      ;;
+    lane-sim|lane-sim-pp)
+      control_profile=sim_control.yaml
+      [[ "$action" == lane-sim-pp ]] && control_profile=sim_pure_pursuit.yaml
       exec ros2 run sly_lane_following lane_node --ros-args -p use_sim_time:=true \
         -p config:="$repo_root/src/sly_lane_following/config/highbay.yaml" \
-        -p control_config:="$repo_root/src/sly_lane_following/config/sim_control.yaml" \
+        -p control_config:="$repo_root/src/sly_lane_following/config/$control_profile" \
         -p image_topic:=/camera/image_raw -p camera_info_topic:=/camera/camera_info -p reliable_input:=false "$@"
       ;;
     adapter)
@@ -109,7 +129,7 @@ action="${1:-help}"
 shift || true
 case "$action" in
   help|-h|--help) usage; exit 0 ;;
-  up|shell|info|inspect|replay|view|imu|pause|resume|build|lane-offline|lane|lane-view|sim|lane-sim|adapter|enable|stop|lane-reset|exec) ;;
+  up|shell|info|inspect|replay|view|imu|pause|resume|build|lane-offline|lane|lane-view|sim|lane-sim|lane-sim-pp|lane-pp|lane-enet|lane-offline-enet|adapter|enable|stop|lane-reset|exec) ;;
   *) usage; exit 2 ;;
 esac
 

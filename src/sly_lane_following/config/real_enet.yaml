@@ -1,0 +1,29 @@
+# Primary real-RGB research profile; simulator and OpenCV comparison unchanged.
+# Pixel-domain baseline; no camera height, lane width in metres, or extrinsics.
+roi_top: 0.573  # floor(480 * .573) = 275; matches validated lane-output region
+gray_min: 60
+saturation_max: 100
+contrast_min: 35
+candidate_span: 65
+near_row_min: 0.73
+common_span: 45
+reset_gap_s: 0.5
+switch_frames: 4
+
+init_frames: 8
+
+# Real shallow bends: complement the existing row detector.
+column_scan: true
+fit_mode: piecewise
+column_span: 24
+candidate_arc: 80
+
+mask_backend: enet
+enet_device: cuda
+enet_checkpoint: results/enet_real_v3/training/best.pth
+
+# Consolidate overlapping row/column observations; keep genuine forks separate.
+merge_observed_overlap: true
+
+# Do not connect different stripes across unobserved road pixels.
+split_unsupported_connections: true

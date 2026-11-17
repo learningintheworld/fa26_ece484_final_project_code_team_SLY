@@ -1,10 +1,11 @@
-"""ROS adapter: stamped visual evidence only; metric paths remain empty."""
+"""ROS adapter: stamped visual evidence and optional model-based metric paths."""
 
 from collections import OrderedDict
 import json
 from pathlib import Path as FilePath
 
 import cv2
+import numpy as np
 import rclpy
 import yaml
 from ament_index_python.packages import get_package_share_directory
@@ -19,6 +20,8 @@ from std_msgs.msg import Header
 
 from .core import LaneDetector
 from .control import ImageServo
+from .geometry import VisualPurePursuit
+from geometry_msgs.msg import PoseStamped
 from ackermann_msgs.msg import AckermannDriveStamped
 from std_srvs.srv import Trigger
 
@@ -46,7 +49,16 @@ class LaneNode(Node):
         self.detector = LaneDetector(self.config)
         self.declare_parameter("control_config", "")
         control_file = self.get_parameter("control_config").value
-        self.servo = ImageServo(yaml.safe_load(FilePath(control_file).read_text())) if control_file else None
+        control_cfg = yaml.safe_load(FilePath(control_file).read_text()) if control_file else {}
+        if control_cfg.get("controller", "image_servo") not in ("pure_pursuit", "image_servo"):
+            raise ValueError("Unknown controller")
+        self.metric_control = control_cfg.get("controller") == "pure_pursuit"
+        self.servo = (VisualPurePursuit(control_cfg) if self.metric_control else ImageServo(control_cfg)) if control_file else None
+        self.adaptive_speed=bool(control_cfg.get('adaptive_speed',False))
+        self.speed_feedback=None
+        if self.adaptive_speed:
+            from nav_msgs.msg import Odometry
+            self.create_subscription(Odometry,'/odom',self.on_speed_feedback,10)
         self.request_pub = self.create_publisher(AckermannDriveStamped, "/sly/control/request", 5) if self.servo else None
         self.create_service(Trigger, "/sly/lane/reset", self.reset_service)
         self.declare_parameter("trace_path", "")
@@ -71,7 +83,10 @@ class LaneNode(Node):
         self.create_subscription(Image, self.get_parameter("image_topic").value, self.on_image, qos)
         self.create_subscription(CameraInfo, self.get_parameter("camera_info_topic").value, self.on_info, qos)
         self.create_timer(1.0 / 30.0, self.tick)
-        self.get_logger().info("Image-space mode; metric local_path is unused. Actuation requires a separately armed adapter.")
+        self.get_logger().info("Visual Pure Pursuit" if self.metric_control else "Image-space perception/servo; metric path unused")
+
+    def on_speed_feedback(self,msg):
+        self.speed_feedback=(msg.header.stamp.sec*1000000000+msg.header.stamp.nanosec,float(msg.twist.twist.linear.x))
 
     def reset_service(self, request, response):
         self.reset()
@@ -159,7 +174,25 @@ class LaneNode(Node):
             if debug is None:
                 raise ValueError("LaneDetector.process must return debug_image")
             if self.servo:
-                control = self.servo.compute(result,raw.shape,stamp)
+                if self.adaptive_speed:
+                    from .speed_profile import single_speed_bound
+                    self.servo.cfg['single_speed_bound']=single_speed_bound(self.speed_feedback,self.servo.last_stamp,stamp)
+                control = self.servo.compute(result,raw.shape,stamp,camera) if self.metric_control else self.servo.compute(result,raw.shape,stamp)
+                result.update({k:control[k] for k in ("metric_valid","metric_reason","metric_path") if k in control})
+                if self.metric_control:
+                    cv2.rectangle(debug,(0,29),(debug.shape[1],57),(0,0,0),-1)
+                    cv2.putText(debug, "GROUND MODEL | "+control["metric_reason"],(10,47),cv2.FONT_HERSHEY_SIMPLEX,.48,(255,255,255),1)
+                    if control.get("valid"):
+                        if control.get('metric_path'):
+                            projected=self.servo.projector.image(control['metric_path'],camera)
+                            cv2.polylines(debug,[np.rint(projected).astype(np.int32)],False,(255,0,255),2)
+                        mode=control.get('observation_mode','dual')
+                        cv2.putText(debug,mode,(10,90),cv2.FONT_HERSHEY_SIMPLEX,.5,(0,255,255),1)
+                        if mode.startswith(('single','mixed')):
+                            cv2.rectangle(debug,(0,0),(debug.shape[1],28),(25,25,25),-1)
+                            cv2.putText(debug,mode.upper()+' | CURRENT PAINT + ESTIMATED WIDTH',(10,21),cv2.FONT_HERSHEY_SIMPLEX,.48,(0,255,255),1)
+                        cv2.circle(debug,tuple(int(v) for v in control["target_pixel"]),7,(255,0,255),2)
+                        cv2.putText(debug,f"Target {control['lookahead_actual_m']:.2f} m | curvature {control['curvature_request']:.3f}",(10,70),cv2.FONT_HERSHEY_SIMPLEX,.48,(255,255,255),1)
                 result['control']=control
                 for key,color in [('near',(255,0,255)),('far',(255,0,255)),('reference_near',(255,255,255)),('reference_far',(255,255,255))]:
                     if key in control: cv2.circle(debug,tuple(int(v) for v in control[key]),5,color,2)
@@ -175,6 +208,7 @@ class LaneNode(Node):
         # Input/calibration faults break temporal evidence; a future valid
         # observation must initialize its corridor from fresh measurements.
         self.detector = LaneDetector(self.config)
+        if self.servo:self.servo.reset()
         header = header if header is not None else Header(stamp=self.get_clock().now().to_msg())
         result = {"vision_valid": False, "reason": reason, "confidence": 0.0, "selected": [], "detail": detail}
         debug = None
@@ -204,18 +238,26 @@ class LaneNode(Node):
                     KeyValue(key="confidence", value=str(result.get("confidence", 0.0))),
                     KeyValue(key="selected", value=str(result.get("selected", []))),
                     KeyValue(key="coordinates", value="undistorted image pixels"),
+                    KeyValue(key="observation_mode",value=control.get("observation_mode","invalid")),
                     KeyValue(key="detail", value=str(result.get("detail", ""))),
                     KeyValue(key="control", value=str(control))],
         )
         metric = DiagnosticStatus(
             name="sly/lane/metric_path", hardware_id="sly_rear_axle_ground",
-            level=DiagnosticStatus.OK, message="NOT_USED_IMAGE_SERVO",
-            values=[KeyValue(key="metric_valid", value="false")],
+            level=DiagnosticStatus.OK if result.get("metric_valid") or not self.metric_control else DiagnosticStatus.WARN,
+            message=result.get("metric_reason", "INVALID" if self.metric_control else "NOT_USED_IMAGE_SERVO"),
+            values=[KeyValue(key="metric_valid", value=str(bool(result.get("metric_valid"))).lower()),
+                    KeyValue(key="geometry_source",value=control.get("geometry_source","unused"))],
         )
         self.status_pub.publish(DiagnosticArray(header=header, status=[vision, metric]))
         empty = Path()
         empty.header.stamp = header.stamp
         empty.header.frame_id = "sly_rear_axle_ground"
+        if result.get("metric_valid"):
+            for x,y in result["metric_path"]:
+                point=PoseStamped();point.header=empty.header
+                point.pose.position.x=float(x);point.pose.position.y=float(y);point.pose.orientation.w=1.
+                empty.poses.append(point)
         self.path_pub.publish(empty)
         if reason != self.last_reason:
             self.get_logger().info("Vision status: " + reason)

@@ -1,0 +1,28 @@
+paint_color: yellow
+roi_top: 0.48
+gray_min: 70
+saturation_max: 100
+contrast_min: 15
+candidate_span: 45
+min_samples: 7
+near_row_min: 0.80
+common_span: 40
+width_min: 60
+width_max_fraction: 1.1
+init_frames: 8
+anchor_fraction: 0.5
+
+fit_mode: piecewise
+duplicate_distance: 20
+
+# ENet v3 semantics + current RGB paint refinement, simulation only.
+# No color-only fallback: a neural miss stays absent. Geometry and PP unchanged.
+mask_backend: enet
+enet_device: cuda
+enet_checkpoint: results/enet_real_v3/training/best.pth
+enet_refine_paint: true
+confirm_mask_support: true
+defer_far_pair_crossing: true
+association_observed_overlap: true
+
+preserve_row_identity: true

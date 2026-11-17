@@ -49,6 +49,13 @@ class LaneDetector:
         self.cfg = {**DEFAULTS, **(config or {})}
         self.map_key = self.maps = None
         self.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        backend = self.cfg.get('mask_backend', 'opencv')
+        if backend not in ('opencv', 'enet'):
+            raise ValueError('UNKNOWN_MASK_BACKEND')
+        self.neural_mask = None
+        if backend == 'enet':
+            from .neural import NeuralMask
+            self.neural_mask = NeuralMask(self.cfg['enet_checkpoint'], self.cfg.get('enet_device', 'cuda'))
         self.reset()
 
     def reset(self):
@@ -56,6 +63,7 @@ class LaneDetector:
         self.gray_previous = None
         self.roles = {}
         self.memory = {}
+        self.observation_history = {}
         self.identity_lost = False
         self.role_seen_stamp = None
         self.previous_pair = None
@@ -65,6 +73,17 @@ class LaneDetector:
         self.pending_count = 0
 
     def mask(self, image):
+        neural_prediction = None
+        if self.neural_mask is not None:
+            mask = self.neural_mask(image)
+            mask[:int(image.shape[0] * self.cfg['roi_top'])] = 0
+            valid = (self.maps[0] >= 2) & (self.maps[0] < image.shape[1]-2) & (self.maps[1] >= 2) & (self.maps[1] < image.shape[0]-2)
+            mask[~valid] = 0
+            if not self.cfg.get('enet_refine_paint', False):
+                return mask
+            # Refine learned lane regions with current RGB paint evidence.
+            # Intersection only: classic processing cannot fill a neural miss.
+            neural_prediction = mask
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         saturation = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)[:, :, 1]
         enhanced = self.clahe.apply(gray)
@@ -82,11 +101,52 @@ class LaneDetector:
         # Remap borders are not paint.
         valid = (self.maps[0] >= 2) & (self.maps[0] < image.shape[1]-2) & (self.maps[1] >= 2) & (self.maps[1] < image.shape[0]-2)
         mask[~valid] = 0
+        if neural_prediction is None:
+            return mask
+        mask = cv2.bitwise_and(mask, neural_prediction)
+        # ENet already supplies semantic support. Keep the INTERIOR of a
+        # narrow observed paint stripe; Canny alone splits thick paint into
+        # two false boundaries. Wide transverse bends keep the edge scan.
+        interior = ((neural_prediction > 0) & white & valid &
+                    (gray >= self.cfg['gray_min']))
+        interior[:int(image.shape[0] * self.cfg['roi_top'])] = False
+        for y in np.flatnonzero(interior.any(axis=1)):
+            changes = np.diff(np.r_[False, interior[y], False].astype(np.int8))
+            for lo, hi in zip(np.flatnonzero(changes == 1), np.flatnonzero(changes == -1)):
+                if hi-lo <= self.cfg['stripe_width_max']:
+                    mask[y, lo:hi] = 255
         return mask
+
+    def row_identity_priority(self, track):
+        """Prefer the CURRENT near fragment of a recently confirmed boundary.
+
+        Only breaks competition for an already detected row run. It does not
+        add pixels or extend a track across the existing spatial gate.
+        """
+        if not self.cfg.get('preserve_row_identity', False) or self.last_stamp is None:
+            return 1
+        near = np.asarray(track[:10], float)
+        if len(near) < 5 or np.ptp(near[:, 1]) < 24:
+            return 1
+        matched = []
+        for identity in self.previous_pair or ():
+            observations = self.observation_history.get(identity, [])
+            if not observations and identity in self.memory:
+                observations = [self.memory[identity]]
+            for old, seen in reversed(observations):
+                if not 0 < (self.last_stamp-seen)/1e9 <= .25:
+                    continue
+                inside = (near[:,1]>=old['y_min']) & (near[:,1]<=old['y_max'])
+                q = near[inside]
+                if len(q)>=5 and np.ptp(q[:,1])>=24 and np.percentile(abs(q[:,0]-curve_x(old,q[:,1])),90)<12:
+                    matched.append(identity)
+                    break
+        return 0 if len(matched)==1 else 1
 
     def candidates(self, mask):
         h, w = mask.shape
         tracks = []
+        near_priorities = {}
         step = int(self.cfg['row_step'])
         for y in range(h - 5, int(h * self.cfg['roi_top']), -step):
             active = np.count_nonzero(mask[max(0, y-1):y+2], axis=0) >= 2
@@ -103,12 +163,20 @@ class LaneDetector:
                     older = track[max(0, len(track)-4)]
                     slope = np.clip((last_x-older[0])/(last_y-older[1]), -4.5, 4.5)
                 predicted = last_x-slope*dy
+                if ti in near_priorities:
+                    priority = near_priorities[ti]
+                else:
+                    priority = self.row_identity_priority(track)
+                    # The first ten observed points never change as a track
+                    # extends upward; avoid rechecking them at every row.
+                    if len(track)>=10:
+                        near_priorities[ti] = priority
                 for ri, (x, _) in enumerate(runs):
                     error = abs(x-predicted)
                     if error <= self.cfg['track_gate'] * (1 + 0.25*(dy/step-1)):
-                        choices.append((error, ti, ri))
+                        choices.append((priority, error, ti, ri))
             used_t, used_r = set(), set()
-            for _, ti, ri in sorted(choices):
+            for _, _, ti, ri in sorted(choices):
                 if ti in used_t or ri in used_r: continue
                 tracks[ti].append((runs[ri][0], y)); used_t.add(ti); used_r.add(ri)
             tracks.extend([[(x, y)] for ri, (x, _) in enumerate(runs) if ri not in used_r])
@@ -145,6 +213,14 @@ class LaneDetector:
             output.append(dict(coef=coef.tolist(), height=h, y_min=lo, y_max=hi,
                                support=int(best.sum()), residual_px=residual,
                                score=float(min(1., best.sum()*step/(hi-lo+step)))))
+        # Near-horizontal real paint is wide in a row but thin in a column.
+        # Opt-in only: the qualified simulator keeps its original row scan.
+        if self.cfg.get('column_scan', False):
+            output.extend(self.column_candidates(mask))
+        if self.cfg.get("split_unsupported_connections", False):
+            output = self.split_mask_gaps(output, mask)
+        if self.cfg.get("merge_observed_overlap", False):
+            output = self.merge_observed_overlap(output, mask)
         # Merge duplicate fits of the same stripe before pairing.
         output.sort(key=lambda c: (-c['support'], c['residual_px']))
         unique = []
@@ -157,9 +233,194 @@ class LaneDetector:
                     if np.median(np.abs(curve_x(c, ys)-curve_x(other, ys))) < self.cfg['duplicate_distance']:
                         duplicate = True; break
             if not duplicate: unique.append(c)
-        return self.join_fragments(unique)[:16]
+        joined = self.join_fragments(unique, mask if self.cfg.get('column_scan',False) else None)
+        if self.cfg.get('split_unsupported_connections', False):
+            joined = self.split_mask_gaps(joined, mask)
+        if self.cfg.get("confirm_mask_support", False):
+            self.confirm_mask_support(joined, mask)
+        return joined[:16]
 
-    def join_fragments(self, candidates):
+    @staticmethod
+    def confirm_mask_support(candidates, mask):
+        """Confirm sparse row samples using dense current-frame paint evidence.
+
+        No curve extension or gap filling. One-pixel tolerance handles raster
+        rounding; missing stretches and unsupported neighbouring lines fail.
+        """
+        h, w = mask.shape
+        visible = cv2.dilate(mask, np.ones((3, 3), np.uint8))
+        for c in candidates:
+            if c['score'] >= .7:
+                continue
+            ys = np.linspace(c['y_min'], c['y_max'],
+                             max(2, int(2*(c['y_max']-c['y_min']))+1))
+            points = np.column_stack((curve_x(c, ys), ys))
+            arc = np.r_[0., np.cumsum(np.linalg.norm(np.diff(points, axis=0), axis=1))]
+            if not np.isfinite(arc).all() or arc[-1] < 80:
+                continue
+            at = np.arange(0., arc[-1], 1.)
+            xy = np.rint(np.column_stack((np.interp(at, arc, points[:, 0]),
+                                         np.interp(at, arc, points[:, 1])))).astype(int)
+            inside = (xy[:, 0] >= 0) & (xy[:, 0] < w) & (xy[:, 1] >= 0) & (xy[:, 1] < h)
+            supported = np.zeros(len(xy), bool)
+            supported[inside] = visible[xy[inside, 1], xy[inside, 0]] > 0
+            changes = np.diff(np.r_[False, ~supported, False].astype(int))
+            gaps = np.flatnonzero(changes == -1)-np.flatnonzero(changes == 1)
+            fraction = float(supported.mean())
+            gap = int(gaps.max()) if len(gaps) else 0
+            c['mask_support_fraction'] = fraction
+            c['mask_unsupported_run_px'] = gap
+            if fraction >= .98 and gap <= 3:
+                c['row_sample_score'] = c['score']
+                c['score'] = fraction
+
+    def column_candidates(self, mask):
+        """Recover observed shallow arcs; split folds instead of extrapolating.
+
+        Column support complements row support. Returned curves retain the
+        existing x(y) interface, so only monotone-y pieces are admissible.
+        """
+        h, w = mask.shape; step = int(self.cfg['row_step']); tracks = []
+        for x in range(4, w-4, step):
+            active = np.count_nonzero(mask[:, x-1:x+2], axis=1) >= 2
+            changes = np.diff(np.r_[False, active, False].astype(np.int8))
+            runs = [(float((a+b-1)/2), b-a) for a,b in
+                    zip(np.flatnonzero(changes==1),np.flatnonzero(changes==-1))
+                    if 2 <= b-a <= self.cfg['stripe_width_max']]
+            choices=[]
+            for ti,track in enumerate(tracks):
+                last_x,last_y=track[-1];dx=x-last_x
+                if dx>step*(self.cfg['max_gap_rows']+1):continue
+                slope=0.
+                if len(track)>=2:
+                    old=track[max(0,len(track)-4)]
+                    slope=np.clip((last_y-old[1])/(last_x-old[0]),-2.,2.)
+                for ri,(y,_) in enumerate(runs):
+                    error=abs(y-(last_y+slope*dx))
+                    if error<=12*(1+.25*(dx/step-1)):choices.append((error,ti,ri))
+            used_t=set();used_r=set()
+            for _,ti,ri in sorted(choices):
+                if ti not in used_t and ri not in used_r:
+                    tracks[ti].append((x,runs[ri][0]));used_t.add(ti);used_r.add(ri)
+            tracks.extend([[(x,y)] for ri,(y,_) in enumerate(runs) if ri not in used_r])
+        output=[]
+        for track in tracks:
+            pts=np.asarray(track,float)
+            if len(pts)<12:continue
+            # Smooth pixel-scale jitter, never bridge a missing observation.
+            smooth=pts.copy()
+            for i in range(1,len(pts)-1):smooth[i,1]=np.median(pts[i-1:i+2,1])
+            cuts=[0];direction=0
+            for i,dy in enumerate(np.diff(smooth[:,1])):
+                if abs(dy)<.75:continue
+                sign=int(np.sign(dy))
+                if direction and sign!=direction:cuts.append(i)
+                direction=sign
+            cuts.append(len(smooth)-1)
+            for a,b in zip(cuts[:-1],cuts[1:]):
+                p=smooth[a:b+1]
+                if len(p)<12 or np.ptp(p[:,1])<self.cfg.get('column_span',24.):continue
+                arc=np.linalg.norm(np.diff(p,axis=0),axis=1).sum()
+                if arc<self.cfg.get('candidate_arc',80.):continue
+                if p[0,1]>p[-1,1]:p=p[::-1]
+                # Repeated image rows cannot describe two different x's.
+                rows=np.unique(p[:,1]);knots=np.array([[np.median(p[p[:,1]==y,0]),y] for y in rows])
+                if len(knots)<6:continue
+                output.append(dict(coef=np.polyfit(knots[:,1]/h,knots[:,0],2).tolist(),height=h,
+                    y_min=float(rows[0]),y_max=float(rows[-1]),support=len(p),residual_px=0.,
+                    score=float(min(1.,len(p)*step/(np.ptp(p[:,0])+step))),
+                    knots=knots.tolist(),scan_axis='column'))
+        return output
+
+    def split_mask_gaps(self, candidates, mask):
+        """Reject long unobserved connectors before they can inherit an identity.
+
+        Row/column tracking may jump between two different stripes. Inspect
+        the fitted curve in arc length, not just row spacing; keep observed
+        fragments and never fill a missing stripe with a straight connector.
+        """
+        supported = cv2.dilate(mask, np.ones((3, 3), np.uint8))
+        output = []
+        for c in candidates:
+            rows = np.linspace(c['y_min'], c['y_max'], max(8, int(2*(c['y_max']-c['y_min']))+1))
+            xy = np.column_stack((curve_x(c, rows), rows))
+            arc = np.r_[0., np.cumsum(np.linalg.norm(np.diff(xy, axis=0), axis=1))]
+            if arc[-1] < 1: continue
+            distance = np.linspace(0, arc[-1], int(np.ceil(arc[-1]))+1)
+            points = np.column_stack([np.interp(distance, arc, xy[:, k]) for k in (0, 1)])
+            pixels = np.rint(points).astype(int)
+            inside = ((pixels[:, 0]>=0)&(pixels[:, 0]<mask.shape[1])&
+                      (pixels[:, 1]>=0)&(pixels[:, 1]<mask.shape[0]))
+            seen = np.zeros(len(points), bool)
+            seen[inside] = supported[pixels[inside, 1], pixels[inside, 0]] > 0
+            changes = np.diff(np.r_[False, ~seen, False].astype(np.int8))
+            gaps = [(a,b) for a,b in zip(np.flatnonzero(changes==1), np.flatnonzero(changes==-1))
+                    if distance[b-1]-distance[a] > 12.]
+            if not gaps:
+                output.append(c); continue
+            start = 0
+            for a,b in gaps+[(len(points),len(points))]:
+                fragment = points[start:a]; start = b
+                if len(fragment)<2: continue
+                min_span = self.cfg.get('column_span',24.) if c.get('scan_axis')=='column' else self.cfg['candidate_span']
+                if np.ptp(fragment[:, 1])<min_span: continue
+                if np.linalg.norm(np.diff(fragment, axis=0), axis=1).sum()<self.cfg.get('candidate_arc',80.): continue
+                output.append(dict(c, knots=fragment.tolist(), y_min=float(fragment[0,1]),
+                                   y_max=float(fragment[-1,1]), split_unobserved_connector=True))
+        return output
+
+    def merge_observed_overlap(self, candidates, mask):
+        """Unify two scans of the same observed paint, never choose a fork.
+
+        Compare tangents at the SAME image rows. Comparing opposite endpoints
+        confuses a curved stripe with two incompatible straight fragments.
+        Every merge needs a long agreement region and paint between the fits.
+        """
+        candidates = list(candidates)
+        while True:
+            links = []
+            for i, a in enumerate(candidates):
+                for j in range(i + 1, len(candidates)):
+                    b = candidates[j]
+                    lo, hi = max(a['y_min'], b['y_min']), min(a['y_max'], b['y_max'])
+                    span = min(a['y_max'] - a['y_min'], b['y_max'] - b['y_min'])
+                    if hi - lo < 24 or hi - lo < .45 * span: continue
+                    if min(a['score'], b['score']) < .7: continue
+                    rows = np.linspace(lo + 3, hi - 3, 24)
+                    ax, bx = curve_x(a, rows), curve_x(b, rows)
+                    if np.max(abs(ax - bx)) > 6: continue
+                    ta = np.arctan((curve_x(a, rows+3) - curve_x(a, rows-3))/6)
+                    tb = np.arctan((curve_x(b, rows+3) - curve_x(b, rows-3))/6)
+                    if np.percentile(abs(ta-tb), 90) > np.deg2rad(20): continue
+                    # Distinct parallel stripes with a dark gap are not duplicates.
+                    bridge = ax[:, None] + (bx-ax)[:, None]*np.linspace(0, 1, 7)
+                    x = np.rint(bridge).astype(int)
+                    y = np.broadcast_to(np.rint(rows).astype(int)[:, None], x.shape)
+                    inside = (x >= 0) & (x < mask.shape[1]) & (y >= 0) & (y < mask.shape[0])
+                    if not inside.all() or np.mean(mask[y, x] > 0) < .9: continue
+                    links.append((i, j))
+            # Do not resolve competing continuations by iteration order.
+            unique = [(i, j) for i, j in links if
+                      sum(i in link for link in links) == 1 and
+                      sum(j in link for link in links) == 1]
+            if not unique: break
+            i, j = unique[0]; a, b = candidates[i], candidates[j]
+            near = max((a, b), key=lambda c: c['y_max'])
+            ys = np.unique(np.r_[np.linspace(a['y_min'], a['y_max'], 48),
+                                 np.linspace(b['y_min'], b['y_max'], 48)])
+            xs = []
+            for y in ys:
+                owner = near if near['y_min'] <= y <= near['y_max'] else (b if near is a else a)
+                xs.append(float(curve_x(owner, y)))
+            joined = dict(near, knots=np.column_stack((xs, ys)).tolist(),
+                          y_min=float(ys[0]), y_max=float(ys[-1]),
+                          support=max(a['support'], b['support']),
+                          score=min(a['score'], b['score']),
+                          merged_fragments=a.get('merged_fragments', 1)+b.get('merged_fragments', 1))
+            candidates = [c for k, c in enumerate(candidates) if k not in (i, j)] + [joined]
+        return candidates
+
+    def join_fragments(self, candidates, mask=None):
         # Connect pieces of the SAME stripe at adjacent endpoints, not across
         # parallel lanes. Competing continuations are deliberately left apart.
         candidates=list(candidates)
@@ -168,21 +429,49 @@ class LaneDetector:
             for i,a in enumerate(candidates):
                 for j,b in enumerate(candidates):
                     if i==j or not a['y_max']<b['y_max']:continue
+                    # A sparse far fragment must not poison a fully observed
+                    # near boundary. Keep weak fragments separate for inspection.
+                    if min(a['score'],b['score'])<.7:continue
                     gap=b['y_min']-a['y_max']
                     if not -44<=gap<=12:continue
                     y=(a['y_max']+b['y_min'])/2
                     error=abs(float(curve_x(a,y)-curve_x(b,y)))
                     sa=float((curve_x(a,a['y_max'])-curve_x(a,a['y_max']-6))/6)
                     sb=float((curve_x(b,b['y_min']+6)-curve_x(b,b['y_min']))/6)
-                    if error<12 and abs(sa-sb)<1.2:links.append((i,j))
-            unique=[(i,j) for i,j in links if sum(i in pair for pair in links)==1 and sum(j in pair for pair in links)==1]
+                    overlap_lo,overlap_hi=max(a['y_min'],b['y_min']),min(a['y_max'],b['y_max'])
+                    overlap_error=0.
+                    if overlap_hi-overlap_lo>=12:
+                        rows=np.linspace(overlap_lo,overlap_hi,8)
+                        overlap_error=float(np.percentile(abs(curve_x(a,rows)-curve_x(b,rows)),90))
+                    # Tangent angle is meaningful even for steep image curves.
+                    angle=abs(float(np.arctan(sa)-np.arctan(sb)))
+                    connected_bend=False
+                    if mask is not None and 0<=gap<=12 and error<8 and angle<np.deg2rad(60):
+                        # A tight observed bend can rotate its tangent across
+                        # the scan-axis transition. Require actual paint along
+                        # the short junction, not just compatible extrapolation.
+                        start=np.array([curve_x(a,a['y_max']),a['y_max']])
+                        end=np.array([curve_x(b,b['y_min']),b['y_min']])
+                        sample=np.rint(np.linspace(start,end,max(3,int(np.linalg.norm(end-start))+1))).astype(int)
+                        visible=[]
+                        for x,y in sample:
+                            visible.append(bool(mask[max(0,y-1):y+2,max(0,x-1):x+2].any()))
+                        connected_bend=np.linalg.norm(end-start)<=15 and all(visible)
+                    if error<12 and overlap_error<12 and (angle<np.deg2rad(35) or connected_bend):links.append((i,j))
+            # A chain's middle fragment has one predecessor AND one successor;
+            # that is not a fork. Require unique directed continuation.
+            unique=[(i,j) for i,j in links
+                    if sum(a==i for a,b in links)==1 and sum(b==j for a,b in links)==1]
             if not unique:break
             i,j=unique[0];a,b=candidates[i],candidates[j]
             ys=np.unique(np.r_[np.linspace(a['y_min'],a['y_max'],32),np.linspace(b['y_min'],b['y_max'],32)])
             xs=[]
             for y in ys:
                 present=[c for c in (a,b) if c['y_min']<=y<=c['y_max']]
-                xs.append(float(np.mean([curve_x(c,y) for c in present])))
+                # Preserve the current near fragment; averaging crossing tails
+                # can fabricate paint between two distinct observations.
+                owner=b if b in present else a
+                xs.append(float(curve_x(owner,y)))
             combined=dict(a,knots=np.column_stack((xs,ys)).tolist(),y_min=float(ys[0]),y_max=float(ys[-1]),
                           support=a['support']+b['support'],score=min(a['score'],b['score']),
                           residual_px=max(a['residual_px'],b['residual_px']))
@@ -218,7 +507,19 @@ class LaneDetector:
         for i,c in enumerate(candidates):
             for identity,p,seen in predictions:
                 lo,hi=max(c['y_min'],p['y_min']),min(c['y_max'],p['y_max'])
-                if hi-lo<30: continue
+                if hi-lo<30:
+                    # A short LK-predicted overlap must not suppress a valid
+                    # overlap with the ACTUAL previous observation. Paint's
+                    # aperture ambiguity can slide the prediction along it.
+                    observed=pool[identity][0]
+                    dlo,dhi=max(c['y_min'],observed['y_min']),min(c['y_max'],observed['y_max'])
+                    if self.cfg.get('association_observed_overlap',False) and dhi-dlo>=30:
+                        rows=np.linspace(dlo,dhi,10)
+                        error=float(np.median(abs(curve_x(c,rows)-curve_x(observed,rows))))
+                        if error<self.cfg['association_distance']:
+                            overlap=(dhi-dlo)/max(c['y_max']-c['y_min'],observed['y_max']-observed['y_min'])
+                            matches.append((0 if identity in self.roles else 1,error+20*(1-overlap),i,identity))
+                    continue
                 rows=np.linspace(lo,hi,10)
                 error=float(np.median(np.abs(curve_x(c,rows)-curve_x(p,rows))))
                 # Paint has an aperture ambiguity: LK can slide along a stripe
@@ -232,13 +533,70 @@ class LaneDetector:
                 if error<self.cfg['association_distance']:
                     overlap=(hi-lo)/max(c['y_max']-c['y_min'],p['y_max']-p['y_min'])
                     matches.append((0 if identity in self.roles else 1,error+20*(1-overlap),i,identity))
+        history_evidence = {}
+        if self.cfg.get('association_observed_overlap', False) and stamp is not None:
+            # A clipped latest fragment may hide overlap that was observed
+            # one or two frames earlier. Keep at most five ACTUAL observations
+            # within 0.25 s; never reuse their points as a current boundary.
+            for identity in self.previous_pair or ():
+                if any(m[3] == identity for m in matches):
+                    continue
+                choices = []
+                for i, c in enumerate(candidates):
+                    if c['score'] < .7:
+                        continue
+                    evidence = []
+                    for old, seen in self.observation_history.get(identity, []):
+                        age = (stamp-seen)/1e9
+                        if not 0 < age <= .25:
+                            continue
+                        lo, hi = max(c['y_min'],old['y_min']), min(c['y_max'],old['y_max'])
+                        if hi-lo < 30:
+                            continue
+                        rows = np.linspace(lo,hi,10)
+                        error = float(np.median(abs(curve_x(c,rows)-curve_x(old,rows))))
+                        if error < self.cfg['association_distance']:
+                            overlap = (hi-lo)/max(c['y_max']-c['y_min'],old['y_max']-old['y_min'])
+                            evidence.append((error+20*(1-overlap),age))
+                    if evidence:
+                        score,age = min(evidence)
+                        choices.append((score,i,age))
+                choices.sort()
+                if choices and (len(choices)==1 or choices[1][0]-choices[0][0]>3.):
+                    score,i,age = choices[0]
+                    matches.append((0,score,i,identity))
+                    history_evidence[i,identity] = age
+        # Protect the last confirmed boundary's CURRENT near observation.
+        # A longer far branch must not take its identity merely by overlap.
+        for identity in self.previous_pair or ():
+            if identity not in pool:continue
+            old=pool[identity][0];hi=old['y_max'];lo=max(old['y_min'],hi-36.)
+            if hi-lo<24:continue
+            near=[]
+            for i,c in enumerate(candidates):
+                if c['y_max']<hi-6 or c['y_min']>lo:continue
+                rows=np.linspace(lo,min(hi,c['y_max']),8)
+                residual=float(np.percentile(abs(curve_x(c,rows)-curve_x(old,rows)),90))
+                if residual<min(12.,self.cfg['association_distance']):near.append((residual,i))
+            near.sort()
+            if near and (len(near)==1 or near[1][0]-near[0][0]>3.):
+                error,i=near[0]
+                matches.append((-1,error,i,identity))
         used=set()
         for _,_,i,identity in sorted(matches):
             if 'id' not in candidates[i] and identity not in used:
                 candidates[i]['id']=identity; used.add(identity)
+                if (i,identity) in history_evidence:
+                    candidates[i]['association_history_age_s']=history_evidence[i,identity]
         for c in candidates:
             if 'id' not in c: c['id']=self.next_id; self.next_id+=1
         if stamp is not None:
+            if self.cfg.get('association_observed_overlap',False):
+                self.observation_history = {identity:[(old,seen) for old,seen in history
+                    if (stamp-seen)/1e9 <= .25] for identity,history in self.observation_history.items()}
+                self.observation_history = {i:h for i,h in self.observation_history.items() if h}
+                for c in candidates:
+                    self.observation_history[c['id']] = (self.observation_history.get(c['id'],[])+[(dict(c),stamp)])[-5:]
             self.memory={identity:(p,seen) for identity,p,seen in predictions}
             self.memory.update({c['id']:(dict(c),stamp) for c in candidates})
             if any(c['id'] in self.roles for c in candidates): self.role_seen_stamp=stamp
@@ -289,6 +647,26 @@ class LaneDetector:
                 pairs.append(dict(ids=list(ids), score=float(score), base_score=float(base_score), y_min=lo, y_max=hi,
                                   left=np.column_stack((lx,ys)).tolist(), right=np.column_stack((rx,ys)).tolist(),
                                   center=np.column_stack(((lx+rx)/2,ys)).tolist()))
+        if self.cfg.get('defer_far_pair_crossing', False) and self.previous_pair:
+            known = list(self.previous_pair)
+            far_rejection = any(p['ids'] == known and p['reason'] == 'CROSSING_OR_THIN_PAIR'
+                                for p in rejected)
+            by_id = {c['id']: c for c in candidates}
+            if far_rejection and all(i in by_id for i in known):
+                left, right = (by_id[i] for i in known)
+                hi = min(left['y_max'], right['y_max'])
+                lo = max(left['y_min'], right['y_min'], hi-self.cfg['common_span'])
+                rows = np.linspace(lo, hi, 16)
+                widths = curve_x(right, rows)-curve_x(left, rows)
+                if (hi-lo >= self.cfg['common_span'] and hi >= height*self.cfg['near_row_min']
+                        and min(left['score'], right['score']) >= .7
+                        and np.all(widths >= self.cfg['width_min'])
+                        and np.all(widths <= width*self.cfg['width_max_fraction'])):
+                    # Do not accept this as a dual detection or update width.
+                    # The existing metric near-corridor check must confirm all
+                    # current alternatives through the actual pursuit target.
+                    pairs.append(dict(ids=known, deferred_far_crossing=True))
+                    return None, 'AMBIGUOUS_CORRIDOR', pairs, rejected
         pairs.sort(key=lambda p:p['score'], reverse=True)
         if not pairs:
             self.pending_pair, self.pending_count = None, 0

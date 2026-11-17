@@ -24,6 +24,7 @@ setup(
             "lane_node = sly_lane_following.node:main",
             "lane_offline = sly_lane_following.offline:main",
             "lane_adapter = sly_lane_following.adapter:main",
+            "sim_ackermann = sly_lane_following.sim_ackermann:main",
         ]
     },
 )
