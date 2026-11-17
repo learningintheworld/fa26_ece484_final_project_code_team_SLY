@@ -20,7 +20,7 @@ candidate_arc: 80
 
 mask_backend: enet
 enet_device: cuda
-enet_checkpoint: results/enet_real_v3/training/best.pth
+enet_checkpoint: models/enet_v3.pth
 
 # Consolidate overlapping row/column observations; keep genuine forks separate.
 merge_observed_overlap: true

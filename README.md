@@ -6,7 +6,7 @@ Current stage: **Milestone 3 monocular lane-following development**. An optional
 
 [Project website](https://safeautonomy-illinois-students.github.io/fa26_ece484_final_project_site_team_SLY/) · [Course requirement](https://safeautonomy-illinois.github.io/ece484-site/fall-2026/projects/robotaxi/) · [中文启动与上车指南](MILESTONE3.md) · [本地试验报告](results/single_boundary/report.md)
 
-当前代码包含ENet车道识别、视觉Pure Pursuit、Highbay曲率预瞄调速及e4 PACMod启停准备。自适应速度仿真已完成一次独立整圈，到终点883.033秒；实车尚未验收。实车命令见 [E4_QUICKSTART_ZH.md](E4_QUICKSTART_ZH.md)。以下历史报告、数据、视频和模型权重位于本地Git忽略的 `results/`，不随本次代码提交上传；克隆仓库后需单独复制ENet权重。
+当前代码包含ENet车道识别、视觉Pure Pursuit、Highbay曲率预瞄调速及e4 PACMod启停准备。自适应速度仿真已完成一次独立整圈，到终点883.033秒；实车尚未验收。实车命令见 [E4_QUICKSTART_ZH.md](E4_QUICKSTART_ZH.md)。ENet v3权重已随仓库提供于 `models/enet_v3.pth`，克隆即可获得；以下历史报告、原始数据和视频仍在Git忽略的 `results/`，不随代码上传。
 
 ## ENet Highbay 整圈验证（2026-11-15）
 
@@ -20,7 +20,7 @@ Current stage: **Milestone 3 monocular lane-following development**. An optional
 ./scripts/dev.sh exec python scripts/highbay_repeat.py --route full-lap --repeats 1 --speed 0.2 --lookahead 3.5 --perception-config src/sly_lane_following/config/highbay_enet.yaml --output results/my_enet_full_lap
 ```
 
-输出目录需未存在；本入口会独立启动并停止仿真。模型权重在 Git 忽略的 `results/enet_real_v3/training/best.pth`，换电脑须另行提供同一权重。先用故障 PNG 窗口和局部闭环定位问题，再执行完整验证；所有失败记录保留。此次仅本地修改。
+输出目录需未存在；本入口会独立启动并停止仿真。运行配置使用随仓库提供的 `models/enet_v3.pth`；从仓库根目录执行，无需另行复制权重。先用故障 PNG 窗口和局部闭环定位问题，再执行完整验证；所有失败记录保留。此次仅本地修改。
 
 ## 整圈与提速验证（OpenCV 基线，2026-11-15）
 
@@ -328,7 +328,7 @@ ENet v3原基线在23.935秒触发原单侧时限，候选双边界匹配69/75�
 - `./scripts/dev.sh lane-offline-enet --reference results/stage2/reference/reference.json --output results/enet_real_v3/replay_again`：全段离线分析，输出目录须为新目录。
 - 回放三个终端：`./scripts/dev.sh replay`、`./scripts/dev.sh lane-enet`、`./scripts/dev.sh lane-view`；空格播放/暂停，分别Ctrl+C停止。避免同时启动其他感知节点。
 - 原OpenCV比较入口和仿真入口不变；网络入口使用已有venv和CUDA PyTorch，运行不导入MP工作空间。源码、训练和评估来源见报告。
-- 标签、权重、逐帧记录及视频均在Git忽略的 `results`；本轮只做本地修改，未提交或上传GitHub。
+- 历史标签、训练产物、逐帧记录及视频保留在Git忽略的 `results`；当前部署权重另存为仓库中的 `models/enet_v3.pth`。
 
 历史诊断：[23.935秒停止根因](results/single_timeout_v1/report.md)。新模型消除了该帧的远处人行道误检，但左边界退出视野及历史宽度有效性仍是独立问题；没有把该误检当作单侧超时的原因。
 

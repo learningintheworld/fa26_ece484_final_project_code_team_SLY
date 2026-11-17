@@ -19,7 +19,7 @@ duplicate_distance: 20
 # No color-only fallback: a neural miss stays absent. Geometry and PP unchanged.
 mask_backend: enet
 enet_device: cuda
-enet_checkpoint: results/enet_real_v3/training/best.pth
+enet_checkpoint: models/enet_v3.pth
 enet_refine_paint: true
 confirm_mask_support: true
 defer_far_pair_crossing: true

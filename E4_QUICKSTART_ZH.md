@@ -1,26 +1,31 @@
 # GEM e4 实车操作命令
 
-前提：源码在 `~/sly_ws/src/sly_lane_following`，ENet权重已单独复制到 `~/sly_ws/models/best.pth`，车载Python环境已安装兼容的PyTorch。使用车辆已有Humble和 `~/gem_ws`。
+使用车辆已有Ubuntu 22.04 / ROS Humble及 `~/gem_ws`。ENet权重已随仓库提供，无需单独复制。车载Python仍需兼容的PyTorch/CUDA；未验证硬件参数保持null，先只观察。
 
-## 首次构建与配置
+## 首次克隆与构建
 
-构建项目，设置模型绝对路径：
+以下在车载电脑执行；仓库为私有仓库，SSH密钥需获得课程组织授权。`~/sly_ws`须尚不存在；已有本仓库时使用 `git -C ~/sly_ws pull --ff-only` 更新，不覆盖其他工作空间。
 
 ```bash
+git clone git@github.com:safeautonomy-illinois-students/fa26_ece484_final_project_code_team_SLY.git ~/sly_ws
 source /opt/ros/humble/setup.bash
 source ~/gem_ws/install/local_setup.bash
 cd ~/sly_ws
 colcon build --base-paths src --packages-select sly_lane_following --symlink-install
-mkdir -p ~/sly_ws/config ~/sly_ws/results/e4
-python3 - <<'PY'
-from pathlib import Path
-import yaml
-root = Path.home() / 'sly_ws'
-c = yaml.safe_load((root/'src/sly_lane_following/config/real_enet.yaml').read_text())
-c['enet_checkpoint'] = str(root/'models/best.pth')
-(root/'config/real_enet.yaml').write_text(yaml.safe_dump(c))
-PY
+mkdir -p ~/sly_ws/results/e4
 ```
+
+权重位置：`~/sly_ws/models/enet_v3.pth`。默认配置从仓库根目录读取这个相对路径，因此下面命令都先 `cd ~/sly_ws`，无需生成配置副本。
+
+## 首次确认ENet运行环境
+
+使用车载已有兼容PyTorch环境；若使用venv，先激活对应环境。不能复制Jazzy/Python 3.12的虚拟环境到Humble/Python 3.10。
+
+```bash
+python3 -c 'import torch, cv2, yaml; print("PyTorch:", torch.__version__, "CUDA:", torch.cuda.is_available())'
+```
+
+默认网络使用CUDA；报缺少模块或CUDA为False时，先完成车载依赖配置，再启动网络。GPU驱动尚未实查，不预设CUDA安装版本。
 
 ## 每个终端先执行
 
@@ -65,7 +70,7 @@ ros2 run joy joy_node
 ```bash
 python3 -m sly_lane_following.node --ros-args \
   -p use_sim_time:=false -p reliable_input:=false \
-  -p config:="$HOME/sly_ws/config/real_enet.yaml" \
+  -p config:="$HOME/sly_ws/src/sly_lane_following/config/real_enet.yaml" \
   -p control_config:="$HOME/sly_ws/src/sly_lane_following/config/e4_pure_pursuit.yaml" \
   -p image_topic:=/oak/rgb/image_raw \
   -p camera_info_topic:=/oak/rgb/camera_info
