@@ -1,6 +1,6 @@
 # GEM e4 实车操作
 
-更新：2026-11-18。个人公开仓库目录：`~/sly_public`；车载 Ubuntu 22.04 / ROS Humble。默认仍为 ENet v3。最新物理白线身份层和1.5秒路径缓存属于离线试验，下面的实车入口不会启用它们；实车自主车道跟随尚未验收。
+更新：2026-11-18。个人公开仓库目录：`~/sly_public`；车载 Ubuntu 22.04 / ROS Humble。默认仍为 ENet v3；可选 `night` 扩容候选（仅验证合成低光，未验证真实夜间驾驶）。最新物理白线身份层和1.5秒路径缓存属于离线试验，下面的实车入口不会启用它们；实车自主车道跟随尚未验收。
 
 各终端的**快捷脚本与原生命令二选一，不要同时执行**。已有相机、DBW或同名节点正在运行时不重复启动。遇到问题，把 [AI排障交接文档](E4_AI_HANDOFF_ZH.md) 和完整终端输出交给网页版ChatGPT。
 
@@ -14,7 +14,7 @@ cd ~/sly_public
 bash scripts/e4.sh setup
 ```
 
-`setup` 检查现有PACMod消息和真实GPU前向，成功后构建；不安装或升级Torch/CUDA、不新建venv、不启动车辆。v3权重已在仓库内。
+`setup` 检查现有PACMod消息和真实GPU前向，成功后构建；不安装或升级Torch/CUDA、不新建venv、不启动车辆。v3与night权重均随普通Git文件下载，无需Git LFS或额外复制；night的同名JSON也必须保留。
 
 后续更新：
 
@@ -65,13 +65,29 @@ cd ~/sly_public && bash scripts/e4.sh joy
 cd ~/sly_public && bash scripts/e4.sh vision
 ```
 
-GPU预检成功后启动，只生成控制请求。仅停车观察/排障时，可结束它并改用：
+默认命令使用v3。选择夜间扩容候选时，改为下面一条（**二选一**）：
+
+```bash
+cd ~/sly_public && bash scripts/e4.sh vision-night
+```
+
+GPU预检会实际加载所选模型并做一次前向，然后启动感知，只生成控制请求。启动日志会显示`v3`或`night`。night不做在线暗化，也不改变ROI、中心线或Pure Pursuit参数。
+
+切换模型前先执行`stop`并确认车辆停稳，结束原感知节点（Ctrl+C），再启动另一模型；不要同时运行两个感知节点。重启会清空感知历史，不会自动启用驾驶。先用`observe`和`view`查看实际夜间图像。
+
+仅停车观察/排障时，可结束GPU节点并改用v3 CPU：
 
 ```bash
 cd ~/sly_public && bash scripts/e4.sh vision-cpu
 ```
 
-CPU驾驶性能未验证；若`setup`仅因GPU失败未构建，可先`build`供CPU观察。
+night CPU排障替代命令：
+
+```bash
+cd ~/sly_public && bash scripts/e4.sh vision-night-cpu
+```
+
+CPU驾驶性能未验证；若`setup`仅因GPU失败未构建，可先`build`供CPU观察。两种模型和已知限制见[权重说明](models/README.md)。
 
 ### 终端5：观察车辆反馈，不控制执行器
 
@@ -131,7 +147,13 @@ DBW运行时，在新终端收集诊断报告：
 cd ~/sly_public && bash scripts/e4.sh diagnose
 ```
 
-提供`results/e4_diagnostics/时间/report.json`与DBW日志；采集完成不等于检查通过。
+诊断night候选时改用：
+
+```bash
+cd ~/sly_public && bash scripts/e4.sh diagnose-night
+```
+
+提供`results/e4_diagnostics/时间/report.json`与DBW日志；报告包含选定模型、权重哈希及其CPU/GPU前向结果。采集完成不等于检查通过。
 
 Ouster、GNSS、Livox和纯手柄采集的原生命令见下方参考。它们不参与当前RGB车道跟随，无需为运行项目额外开启全部传感器。
 
@@ -184,13 +206,27 @@ ros2 run joy joy_node
 
 ### 终端4：GPU感知与Pure Pursuit
 
-GPU预检成功才启动：
+先选择一组模型变量（二选一）：
 
 ```bash
-"$SLY_RUN_PYTHON" scripts/e4_check.py gpu && \
+SLY_MODEL=v3
+SLY_VISION_CONFIG="$SLY_CONFIG/real_enet.yaml"
+```
+
+或夜间扩容候选：
+
+```bash
+SLY_MODEL=night
+SLY_VISION_CONFIG="$SLY_CONFIG/real_enet_night.yaml"
+```
+
+然后GPU预检成功才启动：
+
+```bash
+"$SLY_RUN_PYTHON" scripts/e4_check.py gpu "$SLY_MODEL" && \
 "$SLY_RUN_PYTHON" -m sly_lane_following.node --ros-args \
   -p use_sim_time:=false -p reliable_input:=false \
-  -p config:="$SLY_CONFIG/real_enet.yaml" \
+  -p config:="$SLY_VISION_CONFIG" \
   -p control_config:="$SLY_CONFIG/e4_pure_pursuit.yaml" \
   -p image_topic:=/oak/rgb/image_raw \
   -p camera_info_topic:=/oak/rgb/camera_info
@@ -202,7 +238,7 @@ CPU排障替代GPU节点，使用临时配置：
 
 ```bash
 SLY_CPU_CONFIG="$(mktemp /tmp/sly_e4_cpu.XXXXXX.yaml)"
-sed 's/^enet_device:.*/enet_device: cpu/' "$SLY_CONFIG/real_enet.yaml" > "$SLY_CPU_CONFIG"
+sed 's/^enet_device:.*/enet_device: cpu/' "$SLY_VISION_CONFIG" > "$SLY_CPU_CONFIG"
 "$SLY_RUN_PYTHON" -m sly_lane_following.node --ros-args \
   -p use_sim_time:=false -p reliable_input:=false \
   -p config:="$SLY_CPU_CONFIG" \
@@ -341,10 +377,10 @@ ros2 service call /sly/lane/reset std_srvs/srv/Trigger '{}'
 ### 诊断
 
 ```bash
-"$SLY_RUN_PYTHON" scripts/e4_diagnose.py
+"$SLY_RUN_PYTHON" scripts/e4_diagnose.py --model v3
 ```
 
-环境加载失败时改用`bash scripts/e4.sh diagnose`，它能尽量记录缺失项。
+night模型将上面`--model v3`改为`--model night`。环境加载失败时改用`bash scripts/e4.sh diagnose`或`diagnose-night`，它能尽量记录缺失项。
 
 </details>
 

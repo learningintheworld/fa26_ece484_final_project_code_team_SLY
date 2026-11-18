@@ -23,6 +23,8 @@ def test_feedback_classification(pubs,count,fresh,valid,expected):
 
 @pytest.mark.parametrize('stderr,expected', [
     ('CHECKPOINT_HASH_MISMATCH','WEIGHT_FAILURE'),
+    ('ENET_METADATA_HASH_MISMATCH','WEIGHT_FAILURE'),
+    ('ENET_METADATA_REQUIRED','WEIGHT_FAILURE'),
     ('libcublasLt.so.12: cannot open shared object file','DYNAMIC_LIBRARY_MISSING'),
     ('CUDA_UNAVAILABLE','CUDA_UNAVAILABLE_CHECK_DRIVER_REPORT'),
     ("No module named 'torch'",'PYTHON_DEPENDENCY_MISSING'),

@@ -66,6 +66,17 @@ https://github.com/learningintheworld/fa26_ece484_final_project_code_team_SLY
 - 本轮局部窗口：36.9–44.1、12–13、65.2–66.4、108.3–109.6、112.3–112.9秒，共339帧。对照窗口没有新增白线连接，现有中心线／指令均未改写；这不是新闭环策略通过回归的证明。108秒仍有身份重建，65秒真实断口未强行填补。
 - 结果图和原始bag在被Git忽略的本地 `results/physical_identity_v2/` 等目录，不随公开仓库发布。网页AI读不到时，应请用户提供对应图片或日志，不要假装已经查看。
 
+## 本次新增：可选夜间扩容候选
+
+- 默认仍是v3；`bash scripts/e4.sh vision-night`选择扩容版，`vision-night-cpu`用于CPU观察，`diagnose-night`收集该模型的诊断。`vision`/`vision-cpu`/`diagnose`仍选择v3。
+- night权重为`models/enet_night_expanded.pth`，必须同时保留`models/enet_night_expanded.json`；普通Git二进制，无需LFS。SHA-256：`425b89429f1ae098edca12c9f8c507e20dd643586d10310716dbd39ab367abf3`。
+- 架构`simple_enet_night_v1`，429,282参数，灰度640×384；`real_enet_night.yaml`只替换checkpoint，其余感知规则与v3配置相同。模型加载器校验JSON格式、权重哈希和预处理；不要删除JSON，也不要把新模型强制加载进原尺寸SimpleENet。
+- 500原图按整圈短片段分组为350/75/75；350训练原图每轮配350低光增强。MP1 epoch20初始化，最佳epoch30。增强包括更暗环境、左右双车灯、Gamma、对比度增减等；运行时直接输入现场RGB，不在实车推理时额外暗化。
+- 合成轻/中度平均IoU比v3高15.23百分点；原图Recall低2.80百分点；中度全部背景误检略增。离线假设运动预览中低光有效率78.6%→85.6%，原图85.5%→73.0%，112.935秒附近新增交接冲突。**候选未达到自动替换条件；用户选择将它作为可选模型提供，仅合成低光改善，不等于真实夜间更可靠。**
+- 已验证实际Torch1.13.1 CPU加载/前向及笔记本GPU，不是车载A4000验收。更换模型不会修复CUDA库、PACMod或实车缺少反馈的问题。
+- 切换前停稳并结束旧感知节点，重启另一入口；只开一套感知发布者。模型切换不启动车辆，硬件验证、启用和停车逻辑不变。首轮先只观察。
+- 排障按“识别→中心线→控制请求”区分。近场几何优先并不意味着删除远场：当前PP仍需要约4.5米前视，最大7米限制；任何近远场置信度或身份规则调整均不是此次部署改动。
+
 ## 3. 最新启动入口如何工作
 
 首次克隆和准备：
@@ -84,7 +95,9 @@ bash scripts/e4.sh setup
 | `build` | 仅构建项目，不检查 GPU；首次 setup 仅因 GPU 失败时，可先 build 供 CPU 观察 |
 | `camera` / `dbw` / `joy` | 官方 OAK 驱动 / 官方 PACMod 驱动 / 手柄输入节点 |
 | `vision` | GPU 检查成功后启动感知；失败退出，不自动转 CPU |
-| `vision-cpu` | 明确使用 CPU 观察；不证明实时性足够 |
+| `vision-cpu` | 明确使用v3 CPU观察；不证明实时性足够 |
+| `vision-night` / `vision-night-cpu` | 扩容低光候选GPU / CPU；只切换权重，先观察 |
+| `diagnose-night` | 检查night候选的哈希和前向，不自动退回v3 |
 | `observe` | 执行器适配器只观察，无执行器发布者 |
 | `drive` | 实车适配器主动模式，仍受未验证配置和启用条件约束，不等于车辆立即运动 |
 | `view` / `record` | 调试图像 / 录制到 `results/e4/run_日期_时间` |

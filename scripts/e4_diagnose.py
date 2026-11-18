@@ -29,7 +29,7 @@ def inference_classification(result):
     text = result['stdout'] + result['stderr']
     if result['returncode'] == 0:
         return 'FORWARD_OK'
-    if 'CHECKPOINT' in text or 'UnpicklingError' in text:
+    if any(word in text for word in ('CHECKPOINT', 'UnpicklingError', 'ENET_METADATA', 'ENET_PREPROCESSING', 'ENET_EXPECTED_TENSOR')):
         return 'WEIGHT_FAILURE'
     if 'cannot open shared object' in text or 'Could not load library' in text:
         return 'DYNAMIC_LIBRARY_MISSING'
@@ -94,6 +94,7 @@ def feedback():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--feedback-child', action='store_true')
+    parser.add_argument('--model', choices=('v3', 'night'), default='v3')
     args = parser.parse_args()
     if args.feedback_child:
         feedback()
@@ -103,12 +104,16 @@ def main():
                   context={k: os.environ.get(k) for k in ('ROS_DISTRO', 'ROS_DOMAIN_ID', 'ROS_LOCALHOST_ONLY', 'SLY_DRIVER_WS')},
                   scope='Read-only; no control enable or actuator commands. Not hardware acceptance.')
     report['source_warnings'] = os.environ.get('SLY_DIAGNOSTIC_SOURCE_WARNINGS', '')
-    checkpoint = ROOT / 'models/enet_v3.pth'
+    from e4_check import selected_checkpoint
+    checkpoint, expected = selected_checkpoint(args.model)
+    report['model'] = args.model
+    report['weight_path'] = str(checkpoint)
+    report['expected_weight_sha256'] = expected
     report['weight_sha256'] = hashlib.sha256(checkpoint.read_bytes()).hexdigest() if checkpoint.exists() else 'MISSING'
     report['nvidia_driver'] = run(['nvidia-smi', '--query-gpu=name,driver_version', '--format=csv,noheader'], 10)
     report['torch'] = run([sys.executable, '-c', 'import torch; print(torch.__version__); print(torch.__file__); print(torch.version.cuda); print("cuda_available", torch.cuda.is_available())'])
     for device in ('cpu', 'gpu'):
-        result = run([sys.executable, str(ROOT/'scripts/e4_check.py'), device], 90)
+        result = run([sys.executable, str(ROOT/'scripts/e4_check.py'), device, args.model], 90)
         result['result'] = inference_classification(result)
         report[device] = result
     report['pacmod_package'] = run(['ros2', 'pkg', 'prefix', 'pacmod2_msgs'])

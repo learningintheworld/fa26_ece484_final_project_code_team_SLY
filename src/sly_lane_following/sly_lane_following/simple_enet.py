@@ -1,5 +1,5 @@
-"""Copied from ECE484 MP1 code/src/mp1/scripts/simple_enet.py.
-Architecture unchanged; independent copy, no MP workspace runtime imports.
+"""MP1-derived SimpleENet; default architecture and state keys are unchanged.
+Optional gated residual expansion is for separate low-light candidates only.
 """
 import torch
 import torch.nn as nn
@@ -227,8 +227,19 @@ class UpsamplingBottleneck(nn.Module):
         out = main + ext
         return self.out_activation(out)
 
+class GatedResidual(nn.Module):
+    """Starts as exact identity; reuses the existing bottleneck design."""
+    def __init__(self, channels, relu=False):
+        super().__init__()
+        self.block = RegularBottleneck(channels, padding=1, dropout_prob=.1, relu=relu)
+        self.gate = nn.Parameter(torch.zeros(()))
+
+    def forward(self, x):
+        return x + self.gate * (self.block(x) - x)
+
+
 class SimpleENet(nn.Module):
-    def __init__(self, num_classes=2, encoder_relu=False, decoder_relu=True):
+    def __init__(self, num_classes=2, encoder_relu=False, decoder_relu=True, expanded=False):
         super(SimpleENet, self).__init__()
 
         self.initial_block = InitialBlock(1, 16, relu=encoder_relu)
@@ -261,6 +272,10 @@ class SimpleENet(nn.Module):
         self.asymmetric3_6 = RegularBottleneck(128, kernel_size=5, asymmetric=True, padding=2, dropout_prob=0.1, relu=encoder_relu)
         self.dilated3_7 = RegularBottleneck(128, dilation=16, padding=16, dropout_prob=0.1, relu=encoder_relu)
 
+        # Optional extra depth without changing spatial resolution or old keys.
+        self.extra64 = nn.Sequential(*(GatedResidual(64, encoder_relu) for _ in range(2))) if expanded else nn.Identity()
+        self.extra128 = nn.Sequential(*(GatedResidual(128, encoder_relu) for _ in range(4))) if expanded else nn.Identity()
+
         # Decoder
         self.upsample4_0 = UpsamplingBottleneck(128, 64, dropout_prob=0.1, relu=decoder_relu)
         self.regular4_1 = RegularBottleneck(64, padding=1, dropout_prob=0.1, relu=decoder_relu)
@@ -281,6 +296,7 @@ class SimpleENet(nn.Module):
         x = self.regular1_2(x)
         x = self.regular1_3(x)
         x = self.regular1_4(x)
+        x = self.extra64(x)
 
         # Stage 2
         stage2_input_size = x.size()
@@ -303,6 +319,7 @@ class SimpleENet(nn.Module):
         x = self.dilated3_5(x)
         x = self.asymmetric3_6(x)
         x = self.dilated3_7(x)
+        x = self.extra128(x)
 
         # Decoder
         x = self.upsample4_0(x, max_indices2_0, output_size=stage2_input_size)
@@ -313,3 +330,26 @@ class SimpleENet(nn.Module):
         x = self.transposed_conv(x, output_size=input_size)
 
         return x
+
+
+ARCHITECTURES = ('simple_enet_v1', 'simple_enet_night_v1')
+
+def create_model(architecture='simple_enet_v1'):
+    if architecture not in ARCHITECTURES:
+        raise ValueError('ENET_UNKNOWN_ARCHITECTURE: ' + str(architecture))
+    return SimpleENet(expanded=architecture == 'simple_enet_night_v1')
+
+def initialize_from_mp1(model, state):
+    """Require every original key; only new residual blocks may be absent."""
+    expected = {k for k in model.state_dict() if not k.startswith(('extra64.', 'extra128.'))}
+    if set(state) != expected:
+        raise ValueError('ENET_PRETRAINED_KEYS_MISMATCH')
+    result = model.load_state_dict(state, strict=False)
+    if result.unexpected_keys or any(not k.startswith(('extra64.', 'extra128.')) for k in result.missing_keys):
+        raise ValueError('ENET_PRETRAINED_KEYS_MISMATCH')
+
+def freeze_pretrained_batchnorm(model):
+    """Freeze old running statistics, not BN affine parameters or new blocks."""
+    for name, layer in model.named_modules():
+        if isinstance(layer, nn.BatchNorm2d) and not name.startswith(('extra64.', 'extra128.')):
+            layer.eval()

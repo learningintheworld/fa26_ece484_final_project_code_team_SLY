@@ -7,6 +7,7 @@ Torch is imported only when this optional backend is selected.
 from pathlib import Path
 import hashlib
 import io
+import json
 import pickle
 import warnings
 import cv2
@@ -55,14 +56,30 @@ def load_checkpoint(torch, checkpoint):
 class NeuralMask:
     def __init__(self, checkpoint, device='cuda'):
         import torch
-        from .simple_enet import SimpleENet
+        from .simple_enet import create_model
         self.torch = torch
         self.device = torch.device(device)
         if self.device.type == 'cuda' and not torch.cuda.is_available():
             raise RuntimeError('ENET_CUDA_UNAVAILABLE: select cpu explicitly for offline use')
-        self.model = SimpleENet().to(self.device)
         state = load_checkpoint(torch, checkpoint)
-        self.inference_roi_top = state.get('inference_roi_top', 0.) or 0.
+        sidecar = Path(checkpoint).expanduser().with_suffix('.json')
+        metadata = state
+        architecture = 'simple_enet_v1'
+        if not sidecar.exists() and 'state_dict' not in state:
+            raise ValueError('ENET_METADATA_REQUIRED: keep the matching JSON beside tensor weights')
+        if sidecar.exists():
+            metadata = json.loads(sidecar.read_text())
+            if metadata.get('schema') != 'sly_enet_tensor_checkpoint_v1':
+                raise ValueError('ENET_METADATA_SCHEMA_MISMATCH')
+            if metadata.get('sha256') != hashlib.sha256(Path(checkpoint).expanduser().read_bytes()).hexdigest():
+                raise ValueError('ENET_METADATA_HASH_MISMATCH')
+            if metadata.get('preprocessing') != 'gray_letterbox_640x384_v1':
+                raise ValueError('ENET_PREPROCESSING_MISMATCH')
+            architecture = metadata['architecture']
+            if not all(isinstance(v, torch.Tensor) for v in state.values()):
+                raise ValueError('ENET_EXPECTED_TENSOR_STATE')
+        self.model = create_model(architecture).to(self.device)
+        self.inference_roi_top = metadata.get('inference_roi_top', 0.) or 0.
         if not isinstance(self.inference_roi_top, (int, float)) or not 0 <= self.inference_roi_top < 1:
             raise ValueError('ENET_INVALID_INFERENCE_ROI')
         if 'state_dict' in state:

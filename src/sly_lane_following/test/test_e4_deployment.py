@@ -50,7 +50,8 @@ def entry(tmp_path):
     root = tmp_path / 'alternate clone'; (root / 'scripts').mkdir(parents=True)
     (root / 'install').mkdir()
     (root / 'src/sly_lane_following/config').mkdir(parents=True)
-    (root / 'src/sly_lane_following/config/real_enet.yaml').write_text('enet_device: cuda\n')
+    (root / 'src/sly_lane_following/config/real_enet.yaml').write_text('enet_device: cuda\nenet_checkpoint: models/enet_v3.pth\n')
+    (root / 'src/sly_lane_following/config/real_enet_night.yaml').write_text('enet_device: cuda\nenet_checkpoint: models/enet_night_expanded.pth\n')
     log = tmp_path / 'calls'
     ros = tmp_path / 'humble.bash'
     ros.write_text('export ROS_DISTRO=humble\necho humble >> "$TEST_LOG"\n')
@@ -61,6 +62,9 @@ def entry(tmp_path):
     commands = {
         'ros2': 'echo "ros2 $*" >> "$TEST_LOG"; exit "${ROS_FAIL:-0}"',
         'python-selected': '''echo "python $*" >> "$TEST_LOG"
+for arg in "$@"; do
+  if [[ "$arg" == config:=* ]]; then cat "${arg#config:=}" >> "$TEST_LOG"; fi
+done
 if [[ "$*" == *'e4_check.py ros'* ]]; then exit "${PY_ROS_FAIL:-0}"; fi
 if [[ "$*" == *'e4_check.py gpu'* ]]; then exit "${GPU_FAIL:-0}"; fi
 ''',
@@ -149,3 +153,30 @@ def test_real_old_torch_rejects_unverified_legacy_checkpoint(tmp_path):
     p.write_bytes(b'corrupted checkpoint')
     with pytest.raises(Exception):
         load_checkpoint(torch,p)
+
+
+def test_night_checks_selected_weights_and_only_changes_vision_profile(entry):
+    p, calls = entry('vision-night')
+    assert p.returncode == 0 and 'e4_check.py gpu night' in calls
+    assert 'enet_checkpoint: models/enet_night_expanded.pth' in calls
+    assert 'enet_device: cuda' in calls and 'e4_pure_pursuit.yaml' in calls
+    assert 'ENet model: night' in p.stdout
+    assert 'lane_adapter' not in calls and 'service call' not in calls
+    p, calls = entry('vision')
+    assert p.returncode == 0 and 'e4_check.py gpu v3' in calls
+    assert 'enet_checkpoint: models/enet_v3.pth' in calls
+
+
+def test_night_failure_cannot_fall_back_or_start_vision(entry):
+    p, calls = entry('vision-night', GPU_FAIL='134')
+    assert p.returncode != 0 and '-m sly_lane_following.node' not in calls
+    assert 'e4_check.py gpu v3' not in calls
+    p, calls = entry('vision-night-cpu')
+    assert p.returncode == 0 and 'e4_check.py gpu' not in calls
+    assert 'enet_device: cpu' in calls and 'enet_night_expanded.pth' in calls
+
+
+def test_night_diagnostic_selection_and_no_project_start(entry):
+    p, calls = entry('diagnose-night')
+    assert p.returncode == 0 and 'e4_diagnose.py --model night' in calls
+    assert 'build ' not in calls and '-m sly_lane_following.node' not in calls

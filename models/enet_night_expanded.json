@@ -1,0 +1,10 @@
+{
+  "schema": "sly_enet_tensor_checkpoint_v1",
+  "architecture": "simple_enet_night_v1",
+  "preprocessing": "gray_letterbox_640x384_v1",
+  "inference_roi_top": 0.5729166666666666,
+  "sha256": "425b89429f1ae098edca12c9f8c507e20dd643586d10310716dbd39ab367abf3",
+  "augmentation_version": "rgb_night_v2",
+  "epoch": 30,
+  "selection_score": 0.9599766130491746
+}
