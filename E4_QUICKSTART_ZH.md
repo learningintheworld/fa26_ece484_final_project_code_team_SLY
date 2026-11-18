@@ -1,5 +1,7 @@
 # GEM e4 实车操作
 
+遇到问题时，把 [网页版 AI 排障交接文档](E4_AI_HANDOFF_ZH.md) 和完整终端输出一起上传给 ChatGPT。
+
 使用个人公开仓库，实车目录为 `~/sly_public`。复用 Ubuntu 22.04、ROS Humble 和已有 PyTorch，不安装或升级依赖，不创建 venv。
 
 ## 首次部署
