@@ -1,137 +1,112 @@
-# GEM e4 实车操作命令
+# GEM e4 实车操作
 
-使用车辆已有Ubuntu 22.04 / ROS Humble及 `~/gem_ws`。ENet权重已随仓库提供，无需单独复制。车载Python仍需兼容的PyTorch/CUDA；未验证硬件参数保持null，先只观察。
+项目目录按今天实车路径：`~/fa26_ece484_final_project_code_team_SLY`。
+官方驱动暂按 `~/gem_ws`；若实际位置不同，每个终端先执行 `export SLY_DRIVER_WS=实际工作空间路径`。入口自动加载 Humble、官方驱动和本项目，保持车辆原有 ROS 通信域。
 
-## 首次克隆与构建
+## 使用前提
 
-以下在车载电脑执行；仓库为私有仓库，SSH密钥需获得课程组织授权。`~/sly_ws`须尚不存在；已有本仓库时使用 `git -C ~/sly_ws pull --ff-only` 更新，不覆盖其他工作空间。
+- 下面的 `scripts/e4.sh` 是实车短命令入口，使用前需同步最新代码到车上。
+- 保留今天车上已完成的 PyTorch 1.13 权重加载兼容修复。当前仓库仍使用 `weights_only=True`，重新覆盖代码可能再次出现 `Unsupported operand 71`。
+- `vision` 暂用 CPU 绕过缺少 `libcublasLt.so.12` 的问题，仅用于观察；实时速度尚未验证。
+- PACMod 消息环境、制动及换挡参数尚未验证。当前只运行 `observe`；`drive` 留待现场验证后使用，不填写猜测参数。
+
+## 准备：更新后构建一次
+
+在已同步本次文件的项目目录运行；ZIP 解压目录不使用 `git pull`，也不要覆盖车上已有兼容修复。
 
 ```bash
-git clone git@github.com:safeautonomy-illinois-students/fa26_ece484_final_project_code_team_SLY.git ~/sly_ws
-source /opt/ros/humble/setup.bash
-source ~/gem_ws/install/local_setup.bash
-cd ~/sly_ws
-colcon build --base-paths src --packages-select sly_lane_following --symlink-install
-mkdir -p ~/sly_ws/results/e4
+cd ~/fa26_ece484_final_project_code_team_SLY
+bash scripts/e4.sh build
 ```
 
-权重位置：`~/sly_ws/models/enet_v3.pth`。默认配置从仓库根目录读取这个相对路径，因此下面命令都先 `cd ~/sly_ws`，无需生成配置副本。
+## 每个新终端先进入项目
 
-## 首次确认ENet运行环境
-
-使用车载已有兼容PyTorch环境；若使用venv，先激活对应环境。不能复制Jazzy/Python 3.12的虚拟环境到Humble/Python 3.10。
+如使用 Python 虚拟环境，先激活车上已成功运行网络的同一环境。
 
 ```bash
-python3 -c 'import torch, cv2, yaml; print("PyTorch:", torch.__version__, "CUDA:", torch.cuda.is_available())'
+cd ~/fa26_ece484_final_project_code_team_SLY
 ```
 
-默认网络使用CUDA；报缺少模块或CUDA为False时，先完成车载依赖配置，再启动网络。GPU驱动尚未实查，不预设CUDA安装版本。
+## 终端 1：前置 OAK 相机
 
-## 每个终端先执行
-
-加载实车工作空间；所有终端沿用车辆一致的ROS通信域：
+启动相机驱动，项目消费 RGB 与 CameraInfo。已有相机进程时跳过。
 
 ```bash
-source /opt/ros/humble/setup.bash
-source ~/gem_ws/install/local_setup.bash
-source ~/sly_ws/install/local_setup.bash
-export VEHICLE_NAME=e4
-cd ~/sly_ws
+bash scripts/e4.sh camera
 ```
 
-## 终端1：前置OAK
+## 终端 2：PACMod 驱动
 
-已有相机进程则跳过。项目只使用RGB和CameraInfo。
+已有驱动时跳过，不重复启动。
 
 ```bash
-ros2 launch depthai_ros_driver rgbd_pcl.launch.py parent_frame:=oak_link
+bash scripts/e4.sh dbw
 ```
 
-## 终端2：PACMod驱动
+## 终端 3：手柄输入
 
-已有驱动则跳过。
+只启动输入节点。SLY 控制时不能同时运行官方 `dbw_joystick.launch.py` 或 `pacmod2_game_control`，避免争用执行器。
 
 ```bash
-ros2 launch basic_launch dbw_only.launch.py
+bash scripts/e4.sh joy
 ```
 
-## 终端3：手柄输入
+## 终端 4：ENet 感知与 Pure Pursuit
 
-只发布手柄输入；不要同时运行 `dbw_joystick.launch.py` 或 `pacmod2_game_control`。默认使能按钮索引4，须现场核实。
+生成识别结果和控制请求，本命令不直接控制车辆。
 
 ```bash
-ros2 run joy joy_node
+bash scripts/e4.sh vision
 ```
 
-## 终端4：ENet识别与Pure Pursuit请求
+## 终端 5：执行器适配器（当前只观察）
 
-若PyTorch装在车载venv中，先激活对应环境，再执行：
+接收控制请求和车辆反馈，不发送执行器命令。
 
 ```bash
-python3 -m sly_lane_following.node --ros-args \
-  -p use_sim_time:=false -p reliable_input:=false \
-  -p config:="$HOME/sly_ws/src/sly_lane_following/config/real_enet.yaml" \
-  -p control_config:="$HOME/sly_ws/src/sly_lane_following/config/e4_pure_pursuit.yaml" \
-  -p image_topic:=/oak/rgb/image_raw \
-  -p camera_info_topic:=/oak/rgb/camera_info
+bash scripts/e4.sh observe
 ```
 
-## 终端5：执行器适配器
-
-先只观察，不发布执行器命令：
+## 终端 6：识别画面
 
 ```bash
-ros2 run sly_lane_following lane_adapter --ros-args \
-  -p platform:=e4 -p dry_run:=true \
-  -p hardware_config:="$HOME/sly_ws/src/sly_lane_following/config/e4_adapter.yaml"
+bash scripts/e4.sh view
 ```
 
-现场验证并填写 `e4_adapter.yaml` 后，退出只观察节点，才可改为以下命令。未验证参数保持null，禁止使用模拟测试profile；现有速度上限0.2 m/s。
+## 终端 7：录制
+
+保存到 `results/e4/run_日期_时间`。录制相机、车辆反馈、手柄及项目消息；不存在或无法订阅的话题不会自动补齐。结束时在本终端按 Ctrl+C 保存。
 
 ```bash
-ros2 run sly_lane_following lane_adapter --ros-args \
-  -p platform:=e4 -p dry_run:=false \
-  -p hardware_config:="$HOME/sly_ws/src/sly_lane_following/config/e4_adapter.yaml"
+bash scripts/e4.sh record
 ```
 
-## 终端6：显示识别结果
+## 现场验证通过后：启用实车闭环
+
+仅在车辆反馈、控制时延、转向方向、制动、换挡与使能按钮验证完成，并正确填写 `e4_adapter.yaml` 后使用。当前配置仍未验证，速度上限为 0.2 m/s，不沿用仿真 1 m/s。
+
+终端 5 按 Ctrl+C 退出 `observe`，改为：
 
 ```bash
-ros2 run rqt_image_view rqt_image_view /sly/lane/debug_image
+bash scripts/e4.sh drive
 ```
 
-## 终端7：录制数据
-
-录前置RGB、标定、控制请求和车辆反馈：
+终端 8：车辆停稳、空挡、PACMod 禁用，驾驶员按住已确认的使能按钮后执行：
 
 ```bash
-ros2 bag record -o "$HOME/sly_ws/results/e4/run_$(date +%Y%m%d_%H%M%S)" \
-  /oak/rgb/image_raw /oak/rgb/camera_info \
-  /sly/lane/status /sly/lane/local_path /sly/control/request /sly/control/status \
-  /pacmod/vehicle_speed_rpt /pacmod/global_rpt /pacmod/steering_rpt \
-  /pacmod/brake_rpt /pacmod/shift_rpt /joy \
-  /pacmod/global_cmd /pacmod/accel_cmd /pacmod/brake_cmd \
-  /pacmod/steering_cmd /pacmod/shift_cmd
+bash scripts/e4.sh enable
 ```
 
-## 终端8：启用、停止与重置
-
-车辆停稳、空挡、PACMod禁用，驾驶员按住已核实的使能按钮后启用；软件等待制动和前进挡确认才给油门：
+正常停止，保持适配器运行至车辆停稳并完成空挡、禁用流程：
 
 ```bash
-ros2 service call /sly/control/enable std_srvs/srv/SetBool '{data: true}'
+bash scripts/e4.sh stop
 ```
 
-正常停止：保持适配器运行，等待停稳、空挡与禁用确认。
+车辆停稳、退出控制后，才在其他终端按 Ctrl+C。停止进程或禁用 PACMod 不等于车辆制动。
+
+需要重新初始化识别时，仅在停稳且确认车道位置后执行；不会自动恢复驾驶：
 
 ```bash
-ros2 service call /sly/control/enable std_srvs/srv/SetBool '{data: false}'
-```
-
-确认车辆停稳并退出控制后，再在各终端按 **Ctrl+C**。Ctrl+C不代替车辆制动。
-
-仅在停稳、确认车道位置后重置识别；重置不会自动启用驾驶：
-
-```bash
-ros2 service call /sly/lane/reset std_srvs/srv/Trigger '{}'
+bash scripts/e4.sh reset
 ```
