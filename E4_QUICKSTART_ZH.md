@@ -35,11 +35,114 @@ bash scripts/e4.sh build
 
 构建时无需手动执行`unset`、`source`或`colcon`。脚本会清理旧ROS工作空间变量，加载Humble与官方驱动，再只构建本项目；不加载本项目旧安装层，不启动传感器或车辆控制。
 
-## 2. 每个操作终端：先加载环境
+## 2. 日常启动：每个终端复制一段
 
-**使用快捷脚本**只需`cd ~/sly_public`，脚本自动加载环境。
+以下短命令自动加载环境，无需手动`source`。官方驱动默认`~/gem_ws`；如不同，先在各终端设置`SLY_DRIVER_WS`为实际目录。使用车载已有Python环境时先激活，或设置`SLY_PYTHON`为解释器绝对路径。
 
-**使用以下原生命令**，每个新Bash终端先完整执行这一段（项目已构建）：
+### 终端1：前置相机
+
+```bash
+cd ~/sly_public && bash scripts/e4.sh camera
+```
+
+### 终端2：PACMod驱动与车辆TF
+
+```bash
+cd ~/sly_public && bash scripts/e4.sh dbw
+```
+
+### 终端3：手柄输入
+
+```bash
+cd ~/sly_public && bash scripts/e4.sh joy
+```
+
+只读取手柄，不是官方手柄驾驶程序；不能与`pacmod2_game_control`同时控制执行器。
+
+### 终端4：GPU感知与Pure Pursuit
+
+```bash
+cd ~/sly_public && bash scripts/e4.sh vision
+```
+
+GPU预检成功后启动，只生成控制请求。仅停车观察/排障时，可结束它并改用：
+
+```bash
+cd ~/sly_public && bash scripts/e4.sh vision-cpu
+```
+
+CPU驾驶性能未验证；若`setup`仅因GPU失败未构建，可先`build`供CPU观察。
+
+### 终端5：观察车辆反馈，不控制执行器
+
+```bash
+cd ~/sly_public && bash scripts/e4.sh observe
+```
+
+### 终端6：查看识别图
+
+```bash
+cd ~/sly_public && bash scripts/e4.sh view
+```
+
+### 终端7：录制图像、状态与控制请求
+
+```bash
+cd ~/sly_public && bash scripts/e4.sh record
+```
+
+Ctrl+C结束录制并保存到`results/e4/`。bag包含执行器命令，不在连接实车的通信域中全包回放。
+
+## 3. 现场验证后的启用与停止
+
+先确认感知实时性、车辆反馈、转向、制动、换挡与手柄按钮，再按实测填写`e4_adapter.yaml`。未验证参数保持为空；当前实车速度上限0.2m/s。
+
+**终端5：**结束`observe`，改为主动适配器：
+
+```bash
+cd ~/sly_public && bash scripts/e4.sh drive
+```
+
+**终端8：**车辆停稳、空挡、PACMod禁用，驾驶员按住已确认的使能按钮后启用：
+
+```bash
+cd ~/sly_public && bash scripts/e4.sh enable
+```
+
+正常停车：
+
+```bash
+cd ~/sly_public && bash scripts/e4.sh stop
+```
+
+保持适配器运行，等车辆实际停稳并完成空挡、禁用流程，再结束录制与其他进程。Ctrl+C或断开PACMod不能代替制动。
+
+停稳、确认车道位置后，必要时重置感知（不会自动启用驾驶）：
+
+```bash
+cd ~/sly_public && bash scripts/e4.sh reset
+```
+
+## 4. 排障与可选传感器
+
+DBW运行时，在新终端收集诊断报告：
+
+```bash
+cd ~/sly_public && bash scripts/e4.sh diagnose
+```
+
+提供`results/e4_diagnostics/时间/report.json`与DBW日志；采集完成不等于检查通过。
+
+Ouster、GNSS、Livox和纯手柄采集的原生命令见下方参考。它们不参与当前RGB车道跟随，无需为运行项目额外开启全部传感器。
+
+## 5. 原生命令参考
+
+日常优先使用上面的短命令；以下与快捷脚本二选一。先展开并执行公共环境，再选择对应命令。
+
+<details>
+<summary>展开：公共环境、传感器、感知与控制命令</summary>
+
+### 公共环境：每个使用原生命令的新Bash终端执行一次
 
 ```bash
 cd ~/sly_public
@@ -50,17 +153,12 @@ source /opt/ros/humble/setup.bash
 source "${SLY_DRIVER_WS:-$HOME/gem_ws}/install/setup.bash"
 source ./install/local_setup.bash
 export VEHICLE_NAME=e4
+SLY_CONFIG="$PWD/src/sly_lane_following/config"
 ```
 
-官方驱动默认`~/gem_ws`。路径不同时，在上述操作前设置`SLY_DRIVER_WS`为车上真实目录；使用已有Python环境时先激活，或设置`SLY_PYTHON`为其解释器绝对路径，必须兼容Humble/Python3.10。`SLY_RUN_PYTHON`供本指南原生命令使用。沿用车辆通信域，不套用笔记本回放的域设置；不复制笔记本venv、build或install。
-
-## 3. 项目运行：按终端启动
+项目须已构建。沿用车载ROS通信域；不加载Jazzy或作业工作空间。下文用`SLY_CONFIG`缩短配置路径，不省略必需参数。
 
 ### 终端1：前置OAK相机
-
-快捷：`bash scripts/e4.sh camera`
-
-原生命令：
 
 ```bash
 ros2 launch depthai_ros_driver rgbd_pcl.launch.py parent_frame:=oak_link
@@ -70,10 +168,6 @@ ros2 launch depthai_ros_driver rgbd_pcl.launch.py parent_frame:=oak_link
 
 ### 终端2：PACMod驱动与车辆模型
 
-快捷：`bash scripts/e4.sh dbw`
-
-原生命令：
-
 ```bash
 ros2 launch basic_launch dbw_only.launch.py
 ```
@@ -81,10 +175,6 @@ ros2 launch basic_launch dbw_only.launch.py
 该launch同时启动车辆描述/TF与PACMod驱动，不必再启动`robot_description.launch.py`。
 
 ### 终端3：手柄输入
-
-快捷：`bash scripts/e4.sh joy`
-
-原生命令：
 
 ```bash
 ros2 run joy joy_node
@@ -94,31 +184,29 @@ ros2 run joy joy_node
 
 ### 终端4：GPU感知与Pure Pursuit
 
-快捷：`bash scripts/e4.sh vision`
-
-原生命令（GPU预检成功才启动；参数与脚本一致）：
+GPU预检成功才启动：
 
 ```bash
 "$SLY_RUN_PYTHON" scripts/e4_check.py gpu && \
 "$SLY_RUN_PYTHON" -m sly_lane_following.node --ros-args \
   -p use_sim_time:=false -p reliable_input:=false \
-  -p config:="$PWD/src/sly_lane_following/config/real_enet.yaml" \
-  -p control_config:="$PWD/src/sly_lane_following/config/e4_pure_pursuit.yaml" \
+  -p config:="$SLY_CONFIG/real_enet.yaml" \
+  -p control_config:="$SLY_CONFIG/e4_pure_pursuit.yaml" \
   -p image_topic:=/oak/rgb/image_raw \
   -p camera_info_topic:=/oak/rgb/camera_info
 ```
 
 产生识别图、路径和控制请求，不直接发布执行器命令。GPU失败时不自动转CPU。
 
-仅停车观察/排障需要CPU时，先结束GPU节点。快捷：`bash scripts/e4.sh vision-cpu`。原生命令使用临时配置，不修改仓库文件：
+CPU排障替代GPU节点，使用临时配置：
 
 ```bash
 SLY_CPU_CONFIG="$(mktemp /tmp/sly_e4_cpu.XXXXXX.yaml)"
-sed 's/^enet_device:.*/enet_device: cpu/' src/sly_lane_following/config/real_enet.yaml > "$SLY_CPU_CONFIG"
+sed 's/^enet_device:.*/enet_device: cpu/' "$SLY_CONFIG/real_enet.yaml" > "$SLY_CPU_CONFIG"
 "$SLY_RUN_PYTHON" -m sly_lane_following.node --ros-args \
   -p use_sim_time:=false -p reliable_input:=false \
   -p config:="$SLY_CPU_CONFIG" \
-  -p control_config:="$PWD/src/sly_lane_following/config/e4_pure_pursuit.yaml" \
+  -p control_config:="$SLY_CONFIG/e4_pure_pursuit.yaml" \
   -p image_topic:=/oak/rgb/image_raw \
   -p camera_info_topic:=/oak/rgb/camera_info
 rm -f -- "$SLY_CPU_CONFIG"
@@ -128,22 +216,18 @@ CPU实时驾驶性能未验证。若首次`setup`仅因GPU失败未构建，可�
 
 ### 终端5：只观察执行器适配器
 
-快捷：`bash scripts/e4.sh observe`
-
-原生命令（先确认Python能加载ROS/PACMod接口）：
+先加载ROS/PACMod接口：
 
 ```bash
 "$SLY_RUN_PYTHON" scripts/e4_check.py ros && \
 "$SLY_RUN_PYTHON" -c 'from sly_lane_following.adapter import main; main()' --ros-args \
   -p platform:=e4 -p dry_run:=true \
-  -p hardware_config:="$PWD/src/sly_lane_following/config/e4_adapter.yaml"
+  -p hardware_config:="$SLY_CONFIG/e4_adapter.yaml"
 ```
 
 读取请求与车辆反馈，不发布执行器命令。
 
 ### 终端6：图像查看
-
-快捷：`bash scripts/e4.sh view`
 
 ```bash
 ros2 run rqt_image_view rqt_image_view /sly/lane/debug_image
@@ -157,9 +241,7 @@ ros2 run rqt_image_view rqt_image_view /oak/rgb/image_raw
 
 ### 终端7：项目运行录制
 
-快捷：`bash scripts/e4.sh record`
-
-原生命令（与脚本相同；Ctrl+C正常结束并保存）：
+Ctrl+C结束并保存：
 
 ```bash
 mkdir -p results/e4
@@ -173,9 +255,9 @@ ros2 bag record -o "results/e4/run_$(date +%Y%m%d_%H%M%S)" \
 
 只记录实际发布且订阅成功的话题。此bag包含控制命令，不能在接通实车执行器的通信域中全包回放。
 
-## 4. 按需采集：Ouster、GNSS与Livox
+### 可选传感器：Ouster、GNSS与Livox
 
-这些传感器**不参与当前RGB车道跟随控制**。按车辆规程上电，下面每项单独一个新终端，先执行第2节环境加载；读取车上官方e4配置，不手填IP或标定参数。
+这些传感器**不参与当前RGB车道跟随控制**。按车辆规程上电，下面每项单独一个新终端，先执行本参考的公共环境；读取车上官方e4配置，不手填IP或标定参数。
 
 GNSS/INS：
 
@@ -197,7 +279,7 @@ ros2 launch basic_launch livox_lidar.launch.py
 
 不要同时运行`ros2 launch basic_launch sensor_init.launch.py`；它会联动启动多台传感器和角部相机，可能与以上独立进程重复。
 
-只采集前置RGB、Ouster及GNSS时，可在录制终端用下面命令**替代**第3节的项目录制。默认不录深度、OAK点云、角部相机或Livox：
+只采集前置RGB、Ouster及GNSS时，可在录制终端用下面命令**替代**上面的项目录制。默认不录深度、OAK点云、角部相机或Livox：
 
 ```bash
 mkdir -p results/e4
@@ -208,7 +290,7 @@ ros2 bag record -s sqlite3 --max-bag-size 1073741824 \
 
 GNSS话题按车载配置发布，正则允许命名空间前缀；没有发布的消息不会被补录。1GiB只限制单个分片，不限制总数据量。需要Livox时，在录制正则的最末`)$`之前加入`|/livox/(lidar|imu)`。
 
-## 5. 纯手柄驾驶采集模式（可选，替代SLY主动控制）
+### 可选：官方手柄驾驶（替代SLY主动控制）
 
 只在车辆停稳并按助教规程退出SLY主动控制后切换。先结束SLY适配器、独立DBW与独立joy节点，再在已加载环境的新终端运行：
 
@@ -224,56 +306,46 @@ ros2 launch basic_launch dbw_joystick.launch.py
 ros2 launch basic_launch robot_description.launch.py
 ```
 
-## 6. 现场验证后才启用SLY闭环
+### 主动适配器（替换终端5的observe）
 
-必须先确认感知实时性、车辆反馈、转向方向、制动、换挡及手柄按钮，按实测填写`e4_adapter.yaml`。未验证参数继续保持为空；当前实车速度上限0.2m/s。`setup`成功不等于车辆可以自动驾驶。
-
-**终端5：**退出`observe`，换成主动适配器。快捷：`bash scripts/e4.sh drive`。原生命令：
+仅在第3节现场条件满足后使用：
 
 ```bash
 "$SLY_RUN_PYTHON" scripts/e4_check.py ros && \
 "$SLY_RUN_PYTHON" -c 'from sly_lane_following.adapter import main; main()' --ros-args \
-  -p platform:=e4 -p dry_run:=false \
-  -p hardware_config:="$PWD/src/sly_lane_following/config/e4_adapter.yaml"
+  -p platform:=e4 -p dry_run:=false -p hardware_config:="$SLY_CONFIG/e4_adapter.yaml"
 ```
 
-**终端8：**车辆停稳、空挡、PACMod禁用，驾驶员按住已确认的使能按钮后启用。快捷：`bash scripts/e4.sh enable`。原生命令：
+### 终端8：启用、停止或重置（按需单独执行）
+
+启用：
 
 ```bash
 ros2 service call /sly/control/enable std_srvs/srv/SetBool '{data: true}'
 ```
 
-正常停车。快捷：`bash scripts/e4.sh stop`。原生命令：
+停车：
 
 ```bash
 ros2 service call /sly/control/enable std_srvs/srv/SetBool '{data: false}'
 ```
 
-保持主动适配器运行，直到完成停车、空挡和禁用流程；**请求发送成功不等于车辆已经停稳**。确认安全后先在录制终端Ctrl+C保存，再结束其他进程。停进程、断开PACMod或Ctrl+C均不能代替制动。
-
-仅在停稳、确认车道位置后重置感知；不会自动恢复驾驶。快捷：`bash scripts/e4.sh reset`。原生命令：
+停稳后重置感知：
 
 ```bash
 ros2 service call /sly/lane/reset std_srvs/srv/Trigger '{}'
 ```
 
-以上服务让适配器按状态机处理启停、制动与换挡；不要额外向`/pacmod/*_cmd`手工发布猜测的油门、制动或挡位数值。
+启停服务由适配器处理制动和换挡；不手工发布猜测的`/pacmod/*_cmd`数值。正常停止流程见第3节。
 
-## 7. 排障报告
-
-DBW已运行时，在另一个终端执行：
-
-```bash
-cd ~/sly_public
-bash scripts/e4.sh diagnose
-```
-
-已加载第2节环境时，也可直接执行：
+### 诊断
 
 ```bash
 "$SLY_RUN_PYTHON" scripts/e4_diagnose.py
 ```
 
-将`results/e4_diagnostics/时间/report.json`与DBW原始日志交给排障人员。只收集信息、不发布车辆命令；“采集完成”不代表全部检查通过。环境不完整时优先使用`e4.sh diagnose`，它会尽量记录加载失败。
+环境加载失败时改用`bash scripts/e4.sh diagnose`，它能尽量记录缺失项。
 
-原生命令核对来源：[项目启动脚本](scripts/e4.sh)、[官方basic_launch固定版本](https://github.com/UIUC-Robotics/gem_ws/tree/5afbd638d182b40d5300a38bd42e48df969fb42c/src/basic_launch/launch)。这是源码核对，不是本次现场运行验证；以车上已安装的官方工作空间为准。
+</details>
+
+命令核对来源：[项目启动脚本](scripts/e4.sh)、[官方basic_launch固定版本](https://github.com/UIUC-Robotics/gem_ws/tree/5afbd638d182b40d5300a38bd42e48df969fb42c/src/basic_launch/launch)。已核对源码，未在本次修改中执行实车命令。
