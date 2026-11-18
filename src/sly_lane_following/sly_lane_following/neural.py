@@ -5,6 +5,10 @@ model probabilities are resized back; no lane extrapolation/post-fill occurs.
 Torch is imported only when this optional backend is selected.
 """
 from pathlib import Path
+import hashlib
+import io
+import pickle
+import warnings
 import cv2
 import numpy as np
 
@@ -31,6 +35,23 @@ def restore_probability(probability, mapping):
     return cv2.resize(probability[y:y+nh, x:x+nw], (w, h), interpolation=cv2.INTER_LINEAR)
 
 
+# Only this published, reviewed checkpoint may use the legacy pickle loader.
+ENET_V3_SHA256 = '5b6b3c12d4ba1609a6107f6241a3f42f6ce9a8b7112fcacb436be0960452a547'
+
+
+def load_checkpoint(torch, checkpoint):
+    data = Path(checkpoint).expanduser().read_bytes()
+    try:
+        return torch.load(io.BytesIO(data), map_location='cpu', weights_only=True)
+    except pickle.UnpicklingError as error:
+        # PyTorch 1.13's restricted loader cannot read BINFLOAT metadata.
+        if ('Unsupported operand 71' not in str(error)
+                or hashlib.sha256(data).hexdigest() != ENET_V3_SHA256):
+            raise
+        warnings.warn('Using legacy loader for verified ENet v3 checkpoint only', RuntimeWarning)
+        return torch.load(io.BytesIO(data), map_location='cpu', weights_only=False)
+
+
 class NeuralMask:
     def __init__(self, checkpoint, device='cuda'):
         import torch
@@ -40,7 +61,7 @@ class NeuralMask:
         if self.device.type == 'cuda' and not torch.cuda.is_available():
             raise RuntimeError('ENET_CUDA_UNAVAILABLE: select cpu explicitly for offline use')
         self.model = SimpleENet().to(self.device)
-        state = torch.load(Path(checkpoint).expanduser(), map_location='cpu', weights_only=True)
+        state = load_checkpoint(torch, checkpoint)
         self.inference_roi_top = state.get('inference_roi_top', 0.) or 0.
         if not isinstance(self.inference_roi_top, (int, float)) or not 0 <= self.inference_roi_top < 1:
             raise ValueError('ENET_INVALID_INFERENCE_ROI')
