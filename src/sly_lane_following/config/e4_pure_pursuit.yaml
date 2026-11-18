@@ -32,6 +32,11 @@ single_speed_scale: 0.75
 # The nominal camera cannot observe a straight ground target at 4.5 m.
 # Clamp only to a CURRENT observed endpoint; never extrapolate.
 single_target_clamp_m: 1.5
+# Real-data trial ceiling for a CURRENT supported endpoint; not validated on-car.
+# PP uses its actual distance; no extrapolation or width-budget relaxation.
+single_observed_target_max_m: 7.0
+# Fit only the nearest continuous current fragment, bounded by observed arc.
+single_fit_arc_m: 1.5
 
 # Real-data corridor experiment. Pure Pursuit gains/geometry above are unchanged.
 # Budget is nominal-model sensitivity, not a calibrated physical confidence bound.

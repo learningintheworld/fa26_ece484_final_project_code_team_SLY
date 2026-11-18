@@ -27,3 +27,6 @@ merge_observed_overlap: true
 
 # Do not connect different stripes across unobserved road pixels.
 split_unsupported_connections: true
+
+# Identity-only handoff between repeatedly co-observed fragments; no gap fill.
+fragment_identity_handoff: true

@@ -28,7 +28,7 @@ def main():
             if cls.__class__._TYPE_SUPPORT is None:
                 raise RuntimeError('Missing message type support: ' + cls.__name__)
         print('ROS_IMPORT_OK (feedback publishers still require on-vehicle verification)')
-    elif sys.argv[1] == 'gpu':
+    elif sys.argv[1] in ('gpu', 'cpu'):
         import hashlib
         import numpy as np
         import torch
@@ -36,18 +36,22 @@ def main():
         checkpoint = ROOT / 'models/enet_v3.pth'
         if hashlib.sha256(checkpoint.read_bytes()).hexdigest() != ENET_V3_SHA256:
             raise RuntimeError('CHECKPOINT_HASH_MISMATCH: restore models/enet_v3.pth')
-        print('Torch:', torch.__version__, 'CUDA runtime:', torch.version.cuda, flush=True)
-        if not torch.cuda.is_available():
+        print('Torch:', torch.__version__, 'Path:', torch.__file__, 'CUDA runtime:', torch.version.cuda, flush=True)
+        device = 'cuda' if sys.argv[1] == 'gpu' else 'cpu'
+        torch.set_num_threads(1)
+        if device == 'cuda' and not torch.cuda.is_available():
             raise RuntimeError('CUDA_UNAVAILABLE')
-        print('GPU:', torch.cuda.get_device_name(0), flush=True)
-        model = NeuralMask(checkpoint, device='cuda')
+        if device == 'cuda':
+            print('GPU:', torch.cuda.get_device_name(0), flush=True)
+        model = NeuralMask(checkpoint, device=device)
         output = model.probability(np.zeros((480, 768, 3), dtype=np.uint8))
-        torch.cuda.synchronize()
+        if device == 'cuda':
+            torch.cuda.synchronize()
         if output.shape != (480, 768) or not np.isfinite(output).all():
             raise RuntimeError('ENET_INVALID_GPU_OUTPUT')
-        print('GPU_FORWARD_OK (one inference only; not a latency or driving acceptance test)')
+        print(sys.argv[1].upper() + '_FORWARD_OK (one inference only; not a latency or driving acceptance test)')
     else:
-        raise ValueError('Expected ros or gpu')
+        raise ValueError('Expected ros, gpu or cpu')
 
 
 if __name__ == '__main__':

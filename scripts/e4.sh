@@ -4,7 +4,7 @@ set -eo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 action="${1:-help}"
 if [[ "$action" == help ]]; then
-  echo 'Usage: bash scripts/e4.sh setup|build|camera|dbw|joy|vision|vision-cpu|observe|drive|view|record|enable|stop|reset'
+  echo 'Usage: bash scripts/e4.sh diagnose|setup|build|camera|dbw|joy|vision|vision-cpu|observe|drive|view|record|enable|stop|reset'
   exit 0
 fi
 # Preserve the caller's selected Python, but discard inherited ROS overlays.
@@ -12,6 +12,18 @@ python_bin="$(command -v "${SLY_PYTHON:-python3}")" || { echo 'Python interprete
 [[ "$python_bin" = /* ]] || { echo 'SLY_PYTHON must resolve to an executable path' >&2; exit 1; }
 unset AMENT_PREFIX_PATH CMAKE_PREFIX_PATH COLCON_PREFIX_PATH ROS_PACKAGE_PATH PYTHONPATH
 unset ROS_DISTRO ROS_VERSION ROS_PYTHON_VERSION
+# Diagnostics must work even when a required overlay is missing.
+if [[ "$action" == diagnose ]]; then
+  export SLY_DIAGNOSTIC_SOURCE_WARNINGS=''
+  for setup_file in /opt/ros/humble/setup.bash "${SLY_DRIVER_WS:-$HOME/gem_ws}/install/setup.bash"; do
+    if [[ -f "$setup_file" ]]; then
+      source "$setup_file" || export SLY_DIAGNOSTIC_SOURCE_WARNINGS+="Failed to source $setup_file; "
+    else
+      export SLY_DIAGNOSTIC_SOURCE_WARNINGS+="Missing $setup_file; "
+    fi
+  done
+  exec "$python_bin" "$root/scripts/e4_diagnose.py"
+fi
 fail() { echo "E4: $*" >&2; exit 1; }
 [[ -f /opt/ros/humble/setup.bash ]] || fail 'ROS Humble is missing; run this entry on the vehicle.'
 source /opt/ros/humble/setup.bash

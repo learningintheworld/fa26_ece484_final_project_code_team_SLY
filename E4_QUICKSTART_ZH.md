@@ -1,5 +1,7 @@
 # GEM e4 实车操作
 
+更新：2026-11-18。当前默认ENet仍为v3。最新片段连接、物理身份和1.5秒路径缓存属于离线试验，以下实车命令不会启用它们；本版本尚未完成实车自主车道跟随验收。
+
 遇到问题时，把 [网页版 AI 排障交接文档](E4_AI_HANDOFF_ZH.md) 和完整终端输出一起上传给 ChatGPT。
 
 使用个人公开仓库，实车目录为 `~/sly_public`。复用 Ubuntu 22.04、ROS Humble 和已有 PyTorch，不安装或升级依赖，不创建 venv。
@@ -25,6 +27,17 @@ export SLY_PYTHON=/已有Python环境/bin/python3
 
 已有环境可先激活再运行入口；解释器必须与车上 Humble 的 Python 3.10 兼容。不要复制笔记本的虚拟环境、build 或 install。
 
+## 遇到环境或反馈问题
+
+在 DBW 已运行的另一个终端收集只读报告（不启用驾驶、不安装依赖）：
+
+```bash
+cd ~/sly_public
+bash scripts/e4.sh diagnose
+```
+
+把输出末尾指向的 `results/e4_diagnostics/时间/report.json` 和 DBW 终端日志交给排障人员。报告分别检查权重、CPU/GPU 推理、ROS 消息及 6 秒反馈；“采集完成”不代表各项通过。即使官方工作空间缺失，也会尽量保存报告。
+
 ## 后续更新
 
 ```bash
@@ -33,7 +46,7 @@ git pull --ff-only
 bash scripts/e4.sh build
 ```
 
-若 Git 提示本地修改冲突，先保留现场修改，不强制覆盖。`build` 不重复 GPU 检查；环境改变后重新运行 `setup`。
+本次更新只需按上面命令拉取并构建，不需复制笔记本环境、候选v4权重或实验数据。若 Git 提示本地修改冲突，先保留现场修改，不强制覆盖。`build` 不重复 GPU 检查；环境改变后重新运行 `setup`。
 
 ## 每个新终端
 

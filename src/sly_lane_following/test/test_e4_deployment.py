@@ -120,7 +120,7 @@ def test_gpu_preflight_failure_modes(monkeypatch):
     monkeypatch.setattr(sys, 'version_info', (3, 10, 12))
     monkeypatch.setattr(sys, 'argv', ['e4_check.py', 'gpu'])
     cuda = SimpleNamespace(is_available=lambda: False, get_device_name=lambda _: 'mock')
-    fake = SimpleNamespace(cuda=cuda, __version__='mock', version=SimpleNamespace(cuda='mock'))
+    fake = SimpleNamespace(cuda=cuda, __version__='mock', __file__='mock/torch', set_num_threads=lambda _:None, version=SimpleNamespace(cuda='mock'))
     monkeypatch.setitem(sys.modules, 'torch', fake)
     with pytest.raises(RuntimeError, match='CUDA_UNAVAILABLE'):
         check.main()
@@ -130,3 +130,22 @@ def test_gpu_preflight_failure_modes(monkeypatch):
     monkeypatch.setattr(neural, 'NeuralMask', broken_model)
     with pytest.raises(OSError, match='missing CUDA library'):
         check.main()
+
+
+def test_diagnostics_survive_missing_driver_and_do_not_start_project(entry):
+    p, calls = entry('diagnose', SLY_DRIVER_WS='/nonexistent_sly_driver')
+    assert p.returncode == 0 and 'e4_diagnose.py' in calls
+    assert 'build ' not in calls and '\nproject\n' not in calls
+
+
+def test_real_old_torch_rejects_unverified_legacy_checkpoint(tmp_path):
+    torch = pytest.importorskip('torch')
+    if not torch.__version__.startswith('1.13.'):
+        pytest.skip('Actual legacy-loader compatibility test requires Torch 1.13')
+    p=tmp_path/'unknown.pth'
+    torch.save({'metadata': 0.5}, p)
+    with pytest.raises(pickle.UnpicklingError):
+        load_checkpoint(torch,p)
+    p.write_bytes(b'corrupted checkpoint')
+    with pytest.raises(Exception):
+        load_checkpoint(torch,p)

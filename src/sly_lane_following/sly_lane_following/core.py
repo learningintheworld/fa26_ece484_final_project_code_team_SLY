@@ -65,6 +65,7 @@ class LaneDetector:
         self.memory = {}
         self.observation_history = {}
         self.identity_lost = False
+        self.fragment_links = {}
         self.role_seen_stamp = None
         self.previous_pair = None
         self.last_stamp = self.last_valid_stamp = None
@@ -152,7 +153,10 @@ class LaneDetector:
             active = np.count_nonzero(mask[max(0, y-1):y+2], axis=0) >= 2
             changes = np.diff(np.r_[False, active, False].astype(np.int8))
             runs = [(float((a+b-1)/2), b-a) for a, b in zip(np.flatnonzero(changes==1), np.flatnonzero(changes==-1))
-                    if 2 <= b-a <= self.cfg['stripe_width_max']]
+                    if 2 <= b-a <= self.cfg['stripe_width_max']
+                    # In the dual-scan profile, an edge-clipped cross-section
+                    # is not a stripe centre. The other scan may still see it.
+                    and (not self.cfg.get('column_scan', False) or (a > 0 and b < w))]
             choices = []
             for ti, track in enumerate(tracks):
                 last_x, last_y = track[-1]
@@ -238,7 +242,82 @@ class LaneDetector:
             joined = self.split_mask_gaps(joined, mask)
         if self.cfg.get("confirm_mask_support", False):
             self.confirm_mask_support(joined, mask)
-        return joined[:16]
+        return self.recover_tracked_mask(joined,mask)[:16]
+
+    def recover_tracked_mask(self, candidates, mask):
+        """Recover only a uniquely matched, CURRENT connected paint section.
+
+        Short near paint and a curved row/column split can otherwise disappear
+        from candidates despite a good mask. No pixels cross a gap or branch.
+        The real fragment profile opts in; normal/simulator profiles do not.
+        """
+        if not self.cfg.get('fragment_identity_handoff',False) or not self.roles or self.last_stamp is None:
+            return candidates
+        h,w=mask.shape;_,labels,stats,_=cv2.connectedComponentsWithStats((mask>0).astype('uint8'),8)
+        recovered=[]
+        for label,stat in enumerate(stats[1:],1):
+            if stat[cv2.CC_STAT_AREA]<80 or stat[cv2.CC_STAT_HEIGHT]<24:continue
+            points=[];cross_sections=[]
+            for y in range(int(stat[1]+stat[3]-1),int(stat[1])-1,-1):
+                xs=np.flatnonzero(labels[y]==label)
+                if not len(xs):break
+                runs=np.split(xs,np.flatnonzero(np.diff(xs)>1)+1)
+                if len(runs)!=1:break
+                a,b=runs[0][0],runs[0][-1]+1
+                if a<=0 or b>=w or b-a<2:
+                    if not points:continue
+                    break
+                points.append(((a+b-1)/2,y));cross_sections.append(b-a)
+            if len(points)<24:continue
+            # A slanted stripe is wider in a horizontal scan. Validate its
+            # perpendicular thickness rather than deleting a good shallow arc.
+            q=np.asarray(points);slope=np.gradient(q[:,0],q[:,1])
+            thickness=np.asarray(cross_sections)/np.sqrt(1+slope*slope)
+            stop=next((i for i,v in enumerate(thickness) if v>self.cfg['stripe_width_max']),len(q))
+            p=q[:stop][::-1]
+            if len(p)<24:continue
+            span=np.ptp(p[:,1]);arc=np.linalg.norm(np.diff(p,axis=0),axis=1).sum()
+            if span<24 or arc<40:continue
+            matching=[]
+            for identity in self.roles:
+                item=self.memory.get(identity)
+                if item is None or not 0<(self.last_stamp-item[1])/1e9<=.15:continue
+                old=item[0];hi=min(old['y_max'],p[-1,1]);lo=max(old['y_min'],p[0,1],hi-36.)
+                if hi-lo<24:continue
+                y=np.linspace(lo,hi,12)
+                if np.percentile(abs(np.interp(y,p[:,1],p[:,0])-curve_x(old,y)),90)<12:
+                    matching.append(identity)
+            if len(matching)!=1:continue
+            duplicate=[];covered=False
+            for j,c in enumerate(candidates):
+                lo=max(p[0,1],c['y_min']);hi=min(p[-1,1],c['y_max'])
+                if hi-lo<24:continue
+                y=np.linspace(lo,hi,20)
+                if np.percentile(abs(np.interp(y,p[:,1],p[:,0])-curve_x(c,y)),90)>8:continue
+                if c['y_min']<=p[0,1]+8 and c['y_max']>=p[-1,1]-8:covered=True;break
+                if c['y_min']>=p[0,1]-2 and c['y_max']<=p[-1,1]+2:duplicate.append(j)
+            if covered:
+                # A barely 30-row remnant can lose the ordinary 30-row match
+                # after LK slides along paint. The current full-section match
+                # above supplies a stricter, unique near identity instead.
+                if c['y_max']-c['y_min']<36:
+                    recovered.append(([j],dict(c,mask_anchor_id=matching[0])))
+                continue
+            verified=self.fragment_links.get(matching[0],{}).get('count',0)>=3
+            # A current near remnant can be shorter than the generic 80-pixel
+            # candidate arc without needing a far-fragment handoff. It already
+            # passed full cross sections, >=24 shared rows, <12 px residual,
+            # unique identity, >=40 px arc and <=0.15 s actual-observation age.
+            near_remnant = span<self.cfg['candidate_span'] and p[-1,1]>=.85*h
+            if len(duplicate)<2 and not (verified and span<self.cfg['candidate_span']) and not near_remnant:continue
+            recovered.append((duplicate,dict(coef=np.polyfit(p[:,1]/h,p[:,0],2).tolist(),height=h,
+                y_min=float(p[0,1]),y_max=float(p[-1,1]),support=len(p),residual_px=1.,score=1.,
+                knots=p.tolist(),tracked_mask_recovery=True,mask_anchor_id=matching[0])))
+        # A role must not seed multiple competing current components.
+        counts={i:sum(c['mask_anchor_id']==i for _,c in recovered) for i in self.roles}
+        kept=[(indices,c) for indices,c in recovered if counts[c['mask_anchor_id']]==1]
+        removed={j for indices,_ in kept for j in indices}
+        return [c for j,c in enumerate(candidates) if j not in removed]+[c for _,c in kept]
 
     @staticmethod
     def confirm_mask_support(candidates, mask):
@@ -286,7 +365,7 @@ class LaneDetector:
             changes = np.diff(np.r_[False, active, False].astype(np.int8))
             runs = [(float((a+b-1)/2), b-a) for a,b in
                     zip(np.flatnonzero(changes==1),np.flatnonzero(changes==-1))
-                    if 2 <= b-a <= self.cfg['stripe_width_max']]
+                    if 2 <= b-a <= self.cfg['stripe_width_max'] and a > 0 and b < h]
             choices=[]
             for ti,track in enumerate(tracks):
                 last_x,last_y=track[-1];dx=x-last_x
@@ -478,6 +557,62 @@ class LaneDetector:
             candidates=[c for k,c in enumerate(candidates) if k not in (i,j)]+[combined]
         return candidates
 
+    def fragment_identity_handoff(self, candidates, stamp):
+        """Transfer identity only after co-observed, unique fragment evidence.
+
+        Extrapolated tangents are used for association scoring only. Candidate
+        pixels/points are never joined or extended by this function.
+        """
+        if not self.cfg.get('fragment_identity_handoff', False) or stamp is None:
+            return
+        by={c['id']:c for c in candidates}
+        for identity in self.roles:
+            previous=self.fragment_links.get(identity)
+            if identity not in by:
+                if previous and previous['count']>=3 and 0<(stamp-previous['stamp'])/1e9<=.25 and previous['successor'] in by:
+                    b=by[previous['successor']]
+                    # The successor must still match its last ACTUAL fragment.
+                    old=previous['fragment'];lo=max(old['y_min'],b['y_min']);hi=min(old['y_max'],b['y_max'])
+                    if hi-lo>=24 and b['score']>=.7:
+                        y=np.linspace(lo,hi,12)
+                        if np.percentile(abs(curve_x(old,y)-curve_x(b,y)),90)<12:
+                            b['fragment_handoff_from_id']=b['id']
+                            b['fragment_reference_points']=np.c_[curve_x(old,y),y].tolist()
+                            b['fragment_reference_stamp_ns']=previous['stamp']
+                            b['id']=identity
+                            self.memory.pop(previous['successor'],None)
+                continue
+            a=by[identity];choices=[];bounded_grace=False
+            if a['score']<.7:continue
+            # Full observed end sections; no extrapolated lane points emitted.
+            ay=np.linspace(a['y_min'],min(a['y_min']+30,a['y_max']),12)
+            if np.ptp(ay)<24:continue
+            af=np.polyfit(ay,curve_x(a,ay),1)
+            for b in candidates:
+                if b['id']==identity or b['id'] in self.roles or b['score']<.7:continue
+                gap=a['y_min']-b['y_max']
+                if gap<=0:continue
+                grace=(gap>100 and previous and previous['count']>=3 and
+                       previous['successor']==b['id'] and 0<(stamp-previous['stamp'])/1e9<=.15)
+                if gap>100 and not grace:continue
+                bys=np.linspace(max(b['y_min'],b['y_max']-30),b['y_max'],12)
+                if np.ptp(bys)<24:continue
+                bf=np.polyfit(bys,curve_x(b,bys),1);mid=(a['y_min']+b['y_max'])/2
+                angle=abs(np.degrees(np.arctan(af[0])-np.arctan(bf[0])))
+                distance=abs(np.polyval(af,mid)-np.polyval(bf,mid))/np.sqrt(1+af[0]**2)
+                if angle<=10 and distance<=20:
+                    if grace:bounded_grace=True
+                    else:choices.append(b)
+            if len(choices)!=1:
+                # The shrinking near fragment may move just outside the
+                # acquisition gap. Keep an ALREADY verified link for its
+                # original 0.25s lifetime; never refresh it with weaker data.
+                if not choices and bounded_grace:continue
+                self.fragment_links.pop(identity,None);continue
+            b=choices[0];same=previous and previous['successor']==b['id'] and 0<(stamp-previous['stamp'])/1e9<=.15
+            self.fragment_links[identity]=dict(successor=b['id'],fragment=dict(b),stamp=stamp,count=previous['count']+1 if same else 1)
+        self.fragment_links={i:h for i,h in self.fragment_links.items() if (stamp-h['stamp'])/1e9<=.25}
+
     def associate(self, candidates, gray=None, stamp=None):
         # Optical flow only predicts association. A prediction never becomes
         # an observed boundary or a valid centreline by itself.
@@ -533,6 +668,11 @@ class LaneDetector:
                 if error<self.cfg['association_distance']:
                     overlap=(hi-lo)/max(c['y_max']-c['y_min'],p['y_max']-p['y_min'])
                     matches.append((0 if identity in self.roles else 1,error+20*(1-overlap),i,identity))
+        if self.cfg.get('fragment_identity_handoff',False):
+            for i,c in enumerate(candidates):
+                identity=c.get('mask_anchor_id')
+                if identity in self.roles and identity in pool and stamp is not None and 0<(stamp-pool[identity][1])/1e9<=.15:
+                    matches.append((-2,0.,i,identity))
         history_evidence = {}
         if self.cfg.get('association_observed_overlap', False) and stamp is not None:
             # A clipped latest fragment may hide overlap that was observed
@@ -590,6 +730,7 @@ class LaneDetector:
                     candidates[i]['association_history_age_s']=history_evidence[i,identity]
         for c in candidates:
             if 'id' not in c: c['id']=self.next_id; self.next_id+=1
+        self.fragment_identity_handoff(candidates,stamp)
         if stamp is not None:
             if self.cfg.get('association_observed_overlap',False):
                 self.observation_history = {identity:[(old,seen) for old,seen in history
@@ -597,7 +738,8 @@ class LaneDetector:
                 self.observation_history = {i:h for i,h in self.observation_history.items() if h}
                 for c in candidates:
                     self.observation_history[c['id']] = (self.observation_history.get(c['id'],[])+[(dict(c),stamp)])[-5:]
-            self.memory={identity:(p,seen) for identity,p,seen in predictions}
+            retired={c['fragment_handoff_from_id'] for c in candidates if 'fragment_handoff_from_id' in c}
+            self.memory={identity:(p,seen) for identity,p,seen in predictions if identity not in retired}
             self.memory.update({c['id']:(dict(c),stamp) for c in candidates})
             if any(c['id'] in self.roles for c in candidates): self.role_seen_stamp=stamp
             if self.roles and self.role_seen_stamp is not None and (stamp-self.role_seen_stamp)/1e9>self.cfg['memory_s']:

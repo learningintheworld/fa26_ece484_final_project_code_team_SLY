@@ -104,6 +104,18 @@ class CorridorGeometry:
         pending=(self.widths+[width])[-30:]
         return pending,float(np.median(pending))
 
+    def single_boundary_window(self, observed, width):
+        """Legacy radial window; real-camera policy may use a local arc."""
+        horizon=self.cfg['lookahead_m']+width
+        end=next((i for i,p in enumerate(observed) if np.linalg.norm(p)>horizon),len(observed))
+        return observed[:end]
+
+    def single_target_allowed(self, center):
+        """Legacy endpoint tolerance; platform policies may override this gate."""
+        radius = np.linalg.norm(center, axis=1)
+        return min(abs(radius.min()-self.cfg['lookahead_m']),
+                   abs(radius.max()-self.cfg['lookahead_m'])) <= self.cfg.get('single_target_clamp_m', .5)
+
     def single_limit(self,stamp,points,candidate,camera):
         age=(stamp-self.last_dual)/1e9
         if age>self.cfg.get('single_max_s',90.) or self.single_travel_bound>self.cfg.get('single_max_distance_m',10.):
@@ -277,8 +289,7 @@ class CorridorGeometry:
                 observed=self.boundary(b['points'],camera)
                 # Cover the target's normal offset and local tangent fit, but
                 # exclude distant bends that do not constrain this target.
-                end=next((i for i,p in enumerate(observed) if np.linalg.norm(p)>horizon),len(observed))
-                p,t=smooth_boundary(observed[:end])
+                p,t=smooth_boundary(self.single_boundary_window(observed,width))
             except ValueError:continue
             sign=-1. if side=='left' else 1.
             center=p+sign*width/2*np.c_[-t[:,1],t[:,0]]
@@ -288,10 +299,10 @@ class CorridorGeometry:
             # allowed here; contradictory/ambiguous usable sides still stop.
             if radius.min()<=c['lookahead_m']<=radius.max():
                 usable.append((side,b,p,t,center))
-            elif min(abs(radius.min()-c['lookahead_m']),abs(radius.max()-c['lookahead_m']))<=c.get('single_target_clamp_m',.5):
+            elif self.single_target_allowed(center):
                 clamped.append((side,b,p,t,center))
-        # Retain the bounded observed-endpoint clamp (default 0.5 m) when
-        # exactly one side supports it. Never extend the curve to the target.
+        # Accept a bounded observed endpoint only for one unambiguous side.
+        # The platform policy controls its limit; never extend the curve.
         if not usable and len(clamped)==1:usable=clamped
         if len(usable)!=1:
             self.latched=True;raise ValueError('NO_RELIABLE_SINGLE_BOUNDARY')

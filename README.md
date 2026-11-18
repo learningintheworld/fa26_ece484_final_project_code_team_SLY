@@ -8,6 +8,16 @@ Current stage: **Milestone 3 monocular lane-following development**. An optional
 
 当前代码包含ENet车道识别、视觉Pure Pursuit、Highbay曲率预瞄调速及e4 PACMod启停准备。自适应速度仿真已完成一次独立整圈，到终点883.033秒；实车尚未验收。实车命令见 [E4_QUICKSTART_ZH.md](E4_QUICKSTART_ZH.md)。ENet v3权重已随仓库提供于 `models/enet_v3.pth`，克隆即可获得；以下历史报告、原始数据和视频仍在Git忽略的 `results/`，不随代码上传。
 
+## 最新发布状态（2026-11-18）
+
+发布前单元测试：262通过、1跳过（要求Torch1.13的专用测试）；Shell语法与Git差异检查通过。
+
+- **实车部署**：使用个人公开仓库。短命令见 [实车操作指南](E4_QUICKSTART_ZH.md)；网页版ChatGPT排障背景见 [AI交接文档](E4_AI_HANDOFF_ZH.md)。`bash scripts/e4.sh diagnose` 收集GPU/权重/ROS/PACMod诊断；不会启用驾驶或自动升级依赖。
+- **识别**：保持ENet v3；新增原图白漆支持的片段连接及短时RGB物理身份关联。在339帧局部对比中，左弯16帧连接成功，ID34/43及重置后的数字ID能保持物理对应。
+- **中心线**：物理白线相同不等于左右角色相同。U形白线的图像行排序可能反转方向；原ID34未被全段放行，角色假设未自动送入控制。
+- **控制**：最新物理身份与有限路径缓存为可选离线试验，未安装到实车节点；局部比较没有改写现有中心线和指令。v3、官方e4投影、Pure Pursuit、1.5秒实验缓存、7米上限及Highbay配置保持原样。实车尚未验收。
+- **复现范围**：`scripts/analyze_physical_identity.py` 需要本地bag和已保存v3候选；`scripts/analyze_real_stages.py --physical-identity` 可选记录物理身份元数据。数据、图像、实验报告、环境与构建产物均不上传，网页AI不能假设可读取这些本地材料。
+
 ## ENet Highbay 整圈验证（2026-11-15）
 
 **现有 ENet v3 权重已完成一次独立整圈：137.55 m，1074.0 s，驾驶期间零失效控制帧，终点停稳。** 最小车身/轮胎包络余量 0.117 m；出弯仍有摆动，不能视为实车验收。
@@ -370,3 +380,52 @@ ENet v3原基线在23.935秒触发原单侧时限，候选双边界匹配69/75�
 ### GEM e4 实车移植准备
 
 见 [按终端操作的精简中文指南](E4_QUICKSTART_ZH.md)。ENet与Pure Pursuit不变；补齐SLY的PACMod制动/换挡/退出确认流程，官方驱动不改。实车速度配置仍为0.2 m/s上限，未验证硬件参数仍为空；先只观察，现场验证后才闭环。
+
+### 真实数据三层离线分析
+
+在已有 Jazzy 开发容器中，从项目根目录执行：
+
+```bash
+python scripts/analyze_real_stages.py --output results/three_stage_review_02
+```
+
+输出目录须不存在。默认只读 `/data/gem/oak_front_image`，每帧重新执行 v3，分别记录车道候选、中心线和 Pure Pursuit 候选速度/转角。此入口不发布 ROS 控制命令；几何失败后保留当前身份重试，身份完全丢失时另开明确记录的离线会话；将历史宽度时间增长项作为标记而非预览中止原因，仍保留初始宽度不确定度、当前质量、目标支持和歧义检查。不能将预览覆盖率当作连续驾驶通过率。车辆入口及原停车/重新启用流程不变。
+
+输出：`frames.jsonl`、`events.json`、`summary.json` 和 `preview.avi`。33–40秒的用户已确认邻道通过既有缓存几何对应排除，不能将这个人工约束视为通用自动选道成果。本次本地结果见 `results/three_stage_v1/`；前文37.134秒结论是旧版锁定回放记录，不能代表后续所有片段都无法生成中心线。
+
+真实RGB已启用 `fragment_identity_handoff`：只有反复共同观测且唯一的远段才能接续消失近段的边界角色，不连接断口或输出外推点。可用 `--start 45 --end 70` 做局部检查；65秒对比图与完整结果见 `results/identity65_v1/report.md`。实车故障锁定/启用流程不变。
+
+
+### Real-data transition regression (local, 2026-11-18)
+
+The e4 profile now retains verified short paint fragments, checks returning boundaries with local normal widths, and separates observation timestamps/identity confirmation from path validity. ENet v3, nominal e4 projection, Pure Pursuit, the 7 m single-side target cap and Highbay profiles are unchanged. Driving latches remain active.
+
+The final 3,870-frame **offline preview** produced 3,211 centerlines/candidate commands (previously 3,078). There are 4 newly rejected frames inside the inspected windows and remaining gaps; this is not a vehicle or continuous-driving acceptance test. Review local `results/transition_v1/index.html` and `report.md`; `final/` is the final run, while `full/` and `full_corrected/` are retained failed experiments. Artifacts are Git-ignored.
+
+### Local finite-path-cache experiment (not enabled on the vehicle)
+
+`results/path_cache_v1/index.html` compares two short recorded-RGB clips. The
+known near-boundary remnant recovery is in `core.py`; `finite_path.py` provides
+an opt-in, motion-compensated path cache and calls the unchanged Pure Pursuit.
+`python scripts/analyze_path_cache.py` runs the local experiment in Jazzy using
+the existing ignored baseline artifacts and read-only bag. See
+`results/path_cache_v1/report.md` for required inputs and limits.
+
+Motion feedback is **hypothetical**, not measured in this bag. No actuator
+messages are published, the ROS vehicle node does not enable the cache, and
+65.803 s still stops when the archived ambiguity is preserved. Neither local
+preview continuity nor the new cache establishes a physical closed-loop pass.
+
+
+### 统一身份与观测交接（离线实验）
+
+```bash
+python scripts/analyze_real_stages.py --handoff --output results/handoff_review_02
+```
+
+在已有 Jazzy 容器、项目根目录运行；输出目录必须不存在。保留 v3、e4 几何、Pure Pursuit 和 Highbay 配置。短时缺失或远处候选竞争不直接清空已验证近场路径；新边界须通过当前几何及连续观测交接，近场明确冲突仍停止。缓存最多 1.5 秒/0.3 米、目标最多 7 米，预测不刷新观测时间。
+
+这是显式选择的**离线实验入口**，尚未接入实车节点。现有 bag 缺少车速/实际转角，实验用上一请求构造 20 Hz 假设反馈；它不能验证运动补偿的真实误差或闭环连续驾驶。实车接口需要实测反馈与误差界，不能照搬假设反馈。完整回放与图像对比见 `results/unified_handoff_v1/report.md`。
+
+
+112.704秒的近侧交接修复：当两个已知单侧目标的近远支持分离，且较近侧通过连续身份、质量和当前冲突检查时，离线交接层可用当前观测更新路径。新增 `path_update_state` / `stop_required` 区分暂时无法更新与停车。781帧局部对比、真实近场冲突合成反例及限制见 `results/handoff112_fix_v1/report.md`；未重跑完整回放，未启用实车续行。
