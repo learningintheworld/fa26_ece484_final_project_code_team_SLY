@@ -234,7 +234,7 @@ def trial(n,track,name,config,perception_config=PKG/'config/highbay.yaml'):
     perception=yaml.safe_load(perception_config.read_text());shutil.copy2(perception_config,output/'perception.yaml');save(output/'camera.json',n.info)
     import sys
     runner=[sys.executable,'-m','sly_lane_following.node'] if perception.get('mask_backend')=='enet' else ['ros2','run','sly_lane_following','lane_node']
-    log=(output/'perception.log').open('w');command=runner+['--ros-args','-p','use_sim_time:=true','-p','config:='+str(perception_config),'-p','control_config:='+str(output/'control.yaml'),'-p','image_topic:=/camera/image_raw','-p','camera_info_topic:=/camera/camera_info','-p','reliable_input:=false','-p','trace_path:='+str(output/'trace.jsonl')]
+    log=(output/'perception.log').open('w');command=runner+['--ros-args','-p','use_sim_time:=true','-p','config:='+str(perception_config),'-p','control_config:='+str(output/'control.yaml'),'-p','image_topic:=/camera/image_raw','-p','camera_info_topic:=/camera/camera_info','-p','reliable_input:=true','-p','trace_path:='+str(output/'trace.jsonl')]
     proc=subprocess.Popen(command,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
     n.state.pop('request_speed',None);n.control={};n.vision='WAIT';n.output=output;n.frames=0;n.writer=None;n.last_frame=-1.;n.latencies=[]
     if perception.get('mask_backend')=='enet':(output/'raw').mkdir()

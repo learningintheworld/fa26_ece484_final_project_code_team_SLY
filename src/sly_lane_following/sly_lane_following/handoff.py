@@ -58,6 +58,40 @@ def near_evidence(candidates,path,width,projector,camera,cap=7.):
     return dict(conflict=conflict,matches=matches,details=details,scope='supported_near_arc_only')
 
 
+def segment_quality(candidates, geometry, camera, roles, cap=7.):
+    """Record support per distance band; these are evidence, not probabilities.
+
+    Points are existing detector polylines, not additional observations. Far
+    support never votes on lane identity. Network confidence and paint width
+    are deliberately not invented from a candidate's density score.
+    """
+    records=[]
+    for b in candidates:
+        pixels=np.asarray(b['points'],float)
+        ground,valid=geometry.projector.project(pixels,camera)
+        radius=np.linalg.norm(ground,axis=1)
+        track=getattr(geometry,'current_tracks',{}).get(b['id'],{})
+        role=next((side for side,identity in roles.items() if identity==b['id']),None)
+        for name,lo,hi in [('near',0.,cap),('preview',cap,geometry.cfg.get('boundary_range_m',12.)),
+                           ('far',geometry.cfg.get('boundary_range_m',12.),geometry.cfg.get('max_projection_m',30.))]:
+            selected=valid&(radius>lo)&(radius<=hi)
+            if not selected.any():continue
+            q=ground[selected];px=pixels[selected]
+            indices=np.flatnonzero(selected)
+            # Do not count a chord over a missing piece as observed support.
+            adjacent=np.diff(indices)==1
+            arc=float(np.linalg.norm(np.diff(q,axis=0),axis=1)[adjacent].sum())
+            edge=np.minimum.reduce([px[:,0],camera['width']-1-px[:,0],px[:,1],camera['height']-1-px[:,1]])
+            records.append(dict(id=b['id'],role=role,band=name,samples=len(q),
+                radius_m=[float(radius[selected].min()),float(radius[selected].max())],
+                observed_arc_m=arc,edge_fraction=float(np.mean(edge<8)),
+                fit_residual_px=b.get('residual_px'),support_density=b.get('score'),
+                consecutive_observations=track.get('count',0),
+                use=('identity_and_target_evidence' if name=='near' else 'confirmed_role_preview_only'),
+                role_confirmed=role is not None,confidence_scope='geometric_evidence_not_calibrated_probability'))
+    return records
+
+
 def path_agreement(new,reference,tolerance=.25):
     good,offset=relative_to_path(new,reference)
     if good.sum()<4:return False,None
@@ -175,7 +209,7 @@ class UnifiedLaneTracker:
                 if check['conflict']:continue
                 offers.append((center,dict(observation_mode='single_'+side,lane_width_m=self.width,
                     observed_id=b['id'],handoff_side=side,handoff_current_count=current['count'],
-                    handoff_error_m=error,width_updated=False,**quality)))
+                    handoff_error_m=error,width_updated=False,current_handoff_evidence=check,**quality)))
             except ValueError:continue
         self.tracks=next_tracks
         if len(offers)==2:
@@ -183,7 +217,7 @@ class UnifiedLaneTracker:
             if not good:return None
         return min(offers,key=lambda offer:offer[1]['handoff_error_m']) if offers else None
 
-    def step(self,base,result,geometry,stamp,camera,*,speed,front_angle,
+    def _step(self,base,result,geometry,stamp,camera,*,speed,front_angle,
              feedback_stamp,motion_error_bound_m,blocked=()):
         if not self.cache.advance(stamp,speed,front_angle,feedback_stamp):
             return self.stop('MOTION_INVALID_OR_STALE')
@@ -196,10 +230,16 @@ class UnifiedLaneTracker:
                              if reference is not None else None)
         if reference is not None and self.width is not None:
             evidence=near_evidence(result['candidates'],reference,self.width,geometry.projector,camera)
-            if evidence['conflict'] and current_alternative is None:
-                out=self.stop('NEAR_CORRIDOR_CONFLICT',base['reason']);out['handoff_evidence']=evidence;return out
         fresh=base['valid'] and base.get('lookahead_actual_m',100)<=7
         reason=base['reason'] if not base['valid'] else 'TARGET_OUTSIDE_7M'
+        current_evidence=None
+        if fresh and self.width is not None:
+            current_evidence=near_evidence(result['candidates'],base['metric_path'],
+                base.get('lane_width_m',self.width),geometry.projector,camera)
+            # A valid upstream proposal is not permission to cross a visible
+            # interior stripe. Judge it against ALL current candidates too.
+            if current_evidence['conflict']:
+                fresh=False;reason='CURRENT_NEAR_CORRIDOR_CONFLICT'
         if fresh and reference is not None:
             compatible,error=path_agreement(np.asarray(base['metric_path']),reference,self.cfg.get('center_agreement_m',.25))
             # Lack of shared support means no positive conflict was proved.
@@ -209,11 +249,20 @@ class UnifiedLaneTracker:
         alternative=None
         if reference is not None and self.width is not None:
             alternative=self.observed_alternative(result,geometry,reference,evidence,stamp,camera,blocked)
+        # Joint decision: a verified current alternative may invalidate the
+        # stale cached hypothesis. A conflict without such evidence still stops.
+        accepted_alternative=(alternative is not None and
+            (reason in self.TRANSITIONS or reason in self.cache.SUPPORT_FAILURES))
+        if (evidence['conflict'] and current_alternative is None and not accepted_alternative) or reason=='CURRENT_NEAR_CORRIDOR_CONFLICT':
+            out=self.stop('NEAR_CORRIDOR_CONFLICT',base['reason'])
+            out.update(handoff_evidence=evidence,current_handoff_evidence=current_evidence,
+                       joint_decision='unresolved_current_near_conflict')
+            return out
         if current_alternative is not None:
             points,extra=current_alternative;mode='observed_near_handoff'
         elif fresh:
             points=np.asarray(base['metric_path']);extra=dict(base);self.width=base['lane_width_m'];self.ids=geometry.ids.copy();mode='observed'
-        elif alternative is not None and (reason in self.TRANSITIONS or reason in self.cache.SUPPORT_FAILURES):
+        elif accepted_alternative:
             points,extra=alternative;self.ids[extra['handoff_side']]=extra['observed_id'];mode='observed_handoff'
         else:
             if reason in self.TRANSITIONS and reference is not None:
@@ -230,5 +279,24 @@ class UnifiedLaneTracker:
         out.update(mode=mode,handoff_evidence=evidence,corridor_ids=self.ids.copy(),
                    path_update_state='updated' if mode.startswith('observed') else 'pending',
                    stop_required=not out['valid'])
-        if not out['valid']:self.cache.clear()
+        if not out['valid']:
+            self.cache.clear()
+        elif mode in ('observed_handoff','observed_near_handoff'):
+            # Commit the verified role to BOTH consumers. Previously the cache
+            # accepted the new fragment but geometry kept the retired ID, so a
+            # returning opposite boundary could never confirm its role.
+            side=extra['handoff_side'];identity=extra['observed_id']
+            geometry.ids[side]=identity
+            current=next(b for b in result['candidates'] if b['id']==identity)
+            geometry.observed[identity]=(stamp,np.asarray(current['points']).copy())
+            # Width, last_dual and actuator enable state are not refreshed here.
+            out['identity_commit']=dict(side=side,observed_id=identity,
+                source='current_temporally_and_geometrically_verified_observation')
+        out['joint_decision']=('accepted_current_observation' if mode.startswith('observed')
+                               else 'bounded_pending_update')
+        return out
+
+    def step(self,base,result,geometry,stamp,camera,**feedback):
+        out=self._step(base,result,geometry,stamp,camera,**feedback)
+        out['segment_quality']=segment_quality(result['candidates'],geometry,camera,self.ids)
         return out

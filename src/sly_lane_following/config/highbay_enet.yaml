@@ -26,3 +26,6 @@ defer_far_pair_crossing: true
 association_observed_overlap: true
 
 preserve_row_identity: true
+
+# Keep the curved stripe identity through overlapping yellow branches.
+association_distinct_support: true

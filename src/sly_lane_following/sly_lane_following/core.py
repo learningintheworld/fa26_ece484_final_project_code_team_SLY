@@ -722,6 +722,33 @@ class LaneDetector:
             if near and (len(near)==1 or near[1][0]-near[0][0]>3.):
                 error,i=near[0]
                 matches.append((-1,error,i,identity))
+        # At a paint junction the nearest pixels can belong to BOTH branches.
+        # Preserve identity using the currently observed, separated portion;
+        # do not let a shared near tip override distinctive curved support.
+        if self.cfg.get('association_distinct_support', False) and stamp is not None:
+            for identity in self.previous_pair or ():
+                if identity not in pool or not 0 < (stamp-pool[identity][1])/1e9 <= .15:
+                    continue
+                old=pool[identity][0]; choices=[]
+                for i,c in enumerate(candidates):
+                    lo,hi=max(old['y_min'],c['y_min']),min(old['y_max'],c['y_max'])
+                    if hi-lo<30:continue
+                    rows=np.linspace(lo,hi,32); x=curve_x(c,rows)
+                    separated=np.zeros(len(rows),dtype=bool)
+                    for j,other in enumerate(candidates):
+                        if j==i:continue
+                        common=(rows>=other['y_min'])&(rows<=other['y_max'])
+                        separated |= common & (abs(x-curve_x(other,rows))>20)
+                    good=separated & (abs(x-curve_x(old,rows))<12)
+                    # Require contiguous, distinctive current support, not a
+                    # few accidentally matching points on a crossing line.
+                    groups=np.split(np.flatnonzero(good),np.flatnonzero(np.diff(np.flatnonzero(good))>1)+1)
+                    span=max((rows[g[-1]]-rows[g[0]] for g in groups if len(g)),default=0.)
+                    if span>=30 and np.percentile(abs(x-curve_x(old,rows)),75)<12:
+                        choices.append(i)
+                if len(choices)==1:
+                    i=choices[0];matches.append((-3,0.,i,identity))
+                    candidates[i]['distinct_identity_support']=identity
         used=set()
         for _,_,i,identity in sorted(matches):
             if 'id' not in candidates[i] and identity not in used:

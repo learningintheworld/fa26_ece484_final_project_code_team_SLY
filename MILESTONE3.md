@@ -1,8 +1,8 @@
 # Milestone 3：图像车道跟随操作
 
-目标是实车根据前置相机完成低速车道跟随，**尚未完成实车验收**。电脑端 Highbay 此前已通过三次独立 49 m 组合弯路线验证，本轮新增一次 137.53 m 独立整圈验证，详见 [单侧边界报告](results/single_boundary/report.md)。旧 [双边界 Pure Pursuit](results/pure_pursuit/report.md) 和 [降速试验](results/highbay_control/report.md) 均保留。
+目标是实车根据前置相机完成车道跟随，**尚未完成实车验收**。电脑端此前通过三次独立49米组合弯验证；最新ENet Highbay独立整圈进度137.649米，到终点882.418秒，最小包络余量0.116米，零失效控制帧并在终点停稳。最新结果见本地`results/highbay_cache_lap_20261118/`；历史数据、视频和报告不随Git上传。
 
-Highbay 默认使用 RGB、CameraInfo、可靠单侧标线＋历史宽度及 Pure Pursuit；前视 3.5 m、速度上限 0.2 m/s，单侧和转弯时进一步降速。两侧都不可见仍停车锁定。相机几何使用模型参数，不依赖旧 bag 的 TF。e4 配置与仿真分开，真实数据研究已启用受误差预算约束的单侧功能；实车适配器默认只观察。
+仿真使用自己的e2相机几何，e4使用官方名义投影，配置分开。Highbay实时缓存基于实测`/odom`，最多1.5秒/0.3米、续行速度上限0.1 m/s；明确冲突、反馈过期或缓存到期仍停车，图像/请求超时未放宽。离线分段质量与身份交接、有限续行尚未接入实车。实车入口和模型切换以 [E4_QUICKSTART_ZH.md](E4_QUICKSTART_ZH.md) 为准。
 
 ## 1. 电脑端：已有 Jazzy Docker
 
@@ -30,7 +30,7 @@ cd /home/xinweiyu/Workspace/ECE484_Program/fa26_ece484_final_project_code_team_S
 | 5：明确启用 | `./scripts/dev.sh enable` |
 | 5：停止并锁定 | `./scripts/dev.sh stop` |
 
-原图像控制对照使用 `./scripts/dev.sh lane-sim`，不能与 Pure Pursuit 节点同时运行。
+上表`lane-sim-pp`默认使用OpenCV感知；最新ENet整圈用下方专用复现命令。原图像控制对照使用 `./scripts/dev.sh lane-sim`，不能与 Pure Pursuit 节点同时运行。
 
 仿真默认无 GUI，终端 4 显示真实模拟相机与识别结果。需要 Gazebo GUI 时，在终端 1 使用：
 
@@ -61,17 +61,17 @@ cd /home/xinweiyu/Workspace/ECE484_Program/fa26_ece484_final_project_code_team_S
 ./scripts/dev.sh exec python scripts/highbay_experiment.py pp --name full_route --lookahead 3.5 --output results/single_boundary/my_trials
 ```
 
-调试图标注 `single_left` / `single_right` 时，中心线来自当前单侧观测和历史宽度。此时原始双边界状态可以是 `NO_SUPPORTED_EGO_PAIR`，应同时查看控制有效性与 `observation_mode`；它不等同于停车。没有可靠边界时则发布空路径和零速请求并锁定。
+调试图标注 `single_left` / `single_right` 时，中心线来自当前单侧观测和历史宽度。此时原始双边界状态可以是 `NO_SUPPORTED_EGO_PAIR`，应同时查看控制有效性与 `observation_mode`；它不等同于停车。当前观测不足时，Highbay仅在有限缓存和冲突检查均通过时短时续行；缓存不可用或存在明确冲突则发布空路径、请求停车。
 
-### Highbay 整圈试跑
+### Highbay ENet整圈复现
 
-整圈约 137.53 m，需要回到起点；不同于上述约 49 m 组合弯路线。当前 0.2 m/s、前视 3.5 m 已完成一次独立整圈，原 55.69 m 歧义已修复。0.3 m/s 试验在 42.87 m 因可靠单侧片段不足停车，因此默认仍为 0.2 m/s。见 [最新报告与录像](results/nearfield/report.md)；早期失败记录保留在 [旧整圈报告](results/full_lap/report.md)。单次复现：
+整圈约137.53米，需要回到起点。当前ENet v3、前视3.5米，启用自适应速度（直线上限1 m/s，单侧及弯道降速、加速度/加加速度限制），可靠图像订阅与有限缓存已完成一次独立整圈。单次复现：
 
 ```bash
-./scripts/dev.sh exec python scripts/highbay_repeat.py --route full-lap --repeats 1 --speed 0.2 --lookahead 3.5 --output results/nearfield/my_attempt
+./scripts/dev.sh exec python scripts/highbay_repeat.py --route full-lap --repeats 1 --speed 0.2 --lookahead 3.5 --adaptive-speed --perception-config src/sly_lane_following/config/highbay_enet.yaml --output results/my_current_enet_lap
 ```
 
-先关闭已有项目仿真/感知/适配器，使用新的输出目录。脚本不会在故障停车后重新启用；失败时保留全部记录并退出。
+先关闭其他项目仿真/感知/适配器，使用新的输出目录。`--speed 0.2`为基础配置；启用`--adaptive-speed`后由预瞄调速决定速度。脚本不会在故障停车后重新启用，失败时保留记录并退出。
 
 ### 仅仿真：复现速度与方向参数对照
 
@@ -90,8 +90,8 @@ cd /home/xinweiyu/Workspace/ECE484_Program/fa26_ece484_final_project_code_team_S
 
 ## 4. 当前限制
 
-- Highbay 允许可靠单侧＋历史宽度；近处矛盾、观测不足或两侧消失停车。宽度固定假设和 400 s / 70 m 上限仅为当前仿真配置，未证明适用于真实道路。
+- Highbay 允许可靠单侧＋历史宽度；暂缺当前观测时仅允许上述有限缓存续行，近处矛盾或缓存失效停车。宽度固定假设和 400 s / 70 m 上限仅为当前仿真配置，未证明适用于真实道路。
 - 记忆丢失会保持禁用；旧 bag 中持续驾驶并不能模拟这种停车后的车辆画面。
 - 图像控制模式不输出米制路径；Pure Pursuit 模式仅在模型投影有效时发布局部米制路径，无效时为空。
 - 本地测试证明接口行为，不证明实车制动力、延迟、轮胎附着或转向映射正确。
-- 所有改动和结果保留在本地，未提交 GitHub。
+- 代码与操作指南同步个人公开仓库；原始数据、实验报告、视频和构建产物仅留本地。

@@ -6,17 +6,39 @@ Current stage: **Milestone 3 monocular lane-following development**. An optional
 
 [Project website](https://safeautonomy-illinois-students.github.io/fa26_ece484_final_project_site_team_SLY/) · [Course requirement](https://safeautonomy-illinois.github.io/ece484-site/fall-2026/projects/robotaxi/) · [中文启动与上车指南](MILESTONE3.md) · [本地试验报告](results/single_boundary/report.md)
 
-当前代码包含ENet车道识别、视觉Pure Pursuit、Highbay曲率预瞄调速及e4 PACMod启停准备。自适应速度仿真已完成一次独立整圈，到终点883.033秒；实车尚未验收。实车命令见 [E4_QUICKSTART_ZH.md](E4_QUICKSTART_ZH.md)。ENet v3权重已随仓库提供于 `models/enet_v3.pth`，克隆即可获得；以下历史报告、原始数据和视频仍在Git忽略的 `results/`，不随代码上传。
+当前代码包含ENet车道识别、视觉Pure Pursuit、Highbay曲率预瞄调速及e4 PACMod启停准备。最新Highbay版本完成一次独立整圈，到终点882.418秒；实车尚未验收。实车命令见 [E4_QUICKSTART_ZH.md](E4_QUICKSTART_ZH.md)，网页版AI排障背景见 [E4_AI_HANDOFF_ZH.md](E4_AI_HANDOFF_ZH.md)。v3及可选night扩容权重均随仓库提供，默认仍为v3。以下历史报告、原始数据和视频在Git忽略的 `results/`，不随代码上传。
 
 ## 最新发布状态（2026-11-18）
 
-发布前单元测试：262通过、1跳过（要求Torch1.13的专用测试）；Shell语法与Git差异检查通过。
+发布前完整单元测试：**295通过、1跳过**；跳过项要求真实Torch1.13环境，既有兼容报告单独覆盖。两套权重、官方e4投影、Pure Pursuit公式、实车配置和硬件验证门槛未改。
 
-- **实车部署**：使用个人公开仓库。短命令见 [实车操作指南](E4_QUICKSTART_ZH.md)；网页版ChatGPT排障背景见 [AI交接文档](E4_AI_HANDOFF_ZH.md)。`bash scripts/e4.sh diagnose` 收集GPU/权重/ROS/PACMod诊断；不会启用驾驶或自动升级依赖。
-- **识别**：保持ENet v3；新增原图白漆支持的片段连接及短时RGB物理身份关联。在339帧局部对比中，左弯16帧连接成功，ID34/43及重置后的数字ID能保持物理对应。
-- **中心线**：物理白线相同不等于左右角色相同。U形白线的图像行排序可能反转方向；原ID34未被全段放行，角色假设未自动送入控制。
-- **控制**：最新物理身份与有限路径缓存为可选离线试验，未安装到实车节点；局部比较没有改写现有中心线和指令。v3、官方e4投影、Pure Pursuit、1.5秒实验缓存、7米上限及Highbay配置保持原样。实车尚未验收。
-- **复现范围**：`scripts/analyze_physical_identity.py` 需要本地bag和已保存v3候选；`scripts/analyze_real_stages.py --physical-identity` 可选记录物理身份元数据。数据、图像、实验报告、环境与构建产物均不上传，网页AI不能假设可读取这些本地材料。
+| 入口 | 本次代码及验证 | 使用范围 |
+|---|---|---|
+| 实车 `e4.sh` | 保留v3/night、GPU/CPU选择，启停命令不变 | 新交接与有限缓存尚未接入实车；先观察和现场验收 |
+| Highbay实时节点 | 可靠图像订阅、交汇处身份保持、实测里程计补偿的有限缓存 | 一次独立整圈通过；不代表实车验收 |
+| 离线 `--handoff` | 分段质量记录，联合判断当前交接与冲突，同步已确认边界身份 | 真实RGB候选缓存回归，非实车轨迹 |
+
+**离线结果按三层区分：**
+
+- **识别：**沿用两套冻结网络结果，没有重新训练。近场、预瞄和远场分别记录支持长度、完整度及拟合质量；这些是几何证据，不是经标定的网络置信概率。
+- **中心线：**修复已接受新边界但走廊锚点仍保留旧身份的状态不同步；先评估可信当前交接，再检查当前近场冲突。110–114秒night候选有效帧88/120→120/120；15–17秒直线、20–23秒弯道、65–67秒多线对照均无有效性或转向变化。
+- **控制请求：**冻结网络输出的3,870帧完整下游回归中，v3有效3310/3870（85.53%），原有有效转向不变；night候选2827→3312/3870（73.05%→85.58%），恢复112.935秒至结束的485帧，无原有效帧变无效。仍有约0–11.2秒和38.9–46.3秒无效区间，不能称全段通过。79个原先有效的night帧在交接附近转向发生变化，最大差0.1713 rad；这不是对所有画面的零误选证明。
+
+本轮离线缓存最长1.467秒、目标最远6.994米，保留1.5秒与7米限制。回放运动是假设量，不是实测反馈；短时缓存未因此接入实车。图像、分段质量、转向对比和完整统计见本地 `results/near_priority_v1/`。`--physical-identity`仍只记录物理身份元数据，不自动授权车道角色。
+
+## Highbay：可靠订阅与实时缓存整圈验证（2026-11-18）
+
+`highbay_enet.yaml`启用交汇区外的可见曲线身份匹配；`sim_pure_pursuit.yaml`启用`runtime_path_cache`。实时缓存使用实测`/odom`线速度与角速度，最多1.5秒、0.3米，续行速度上限0.1 m/s；预测不刷新观测年龄。当前观测恢复后重新生成路径。真实近场冲突、明确歧义、反馈过期或缓存到期仍停车；缓存不掩盖图像停帧或控制请求超时。此入口只允许仿真时间和模拟车辆几何，e4入口未启用。
+
+最新一次独立整圈：要求137.531米，进度137.649米，到终点882.418秒，最小车身/轮胎余量0.116米，驾驶期间零失效控制帧，终点停稳。缓存参与2帧，最长0.066秒，随后恢复当前右侧观测。请求时延中位61 ms、p95 116 ms。先前52–60米局部验证中缓存参与14帧，最长0.165秒。录像及验收记录保留于本地 `results/highbay_cache_lap_20261118/`；此次发布没有重跑整圈。
+
+复现当前ENet、自适应速度整圈（先关闭其他仿真/感知/适配器，输出目录须未存在）：
+
+```bash
+./scripts/dev.sh exec python scripts/highbay_repeat.py --route full-lap --repeats 1 --speed 0.2 --lookahead 3.5 --adaptive-speed --perception-config src/sly_lane_following/config/highbay_enet.yaml --output results/my_current_enet_lap
+```
+
+`--adaptive-speed`启用直线上限1 m/s的曲率预瞄调速；`--speed 0.2`是基础控制配置，不是该模式的整段速度上限。赛道真值只用于独立评估和终点停车。下面按日期保留旧实验记录；其中“本地／未上传”描述当时状态，当前功能范围以上表为准。
 
 ## ENet Highbay 整圈验证（2026-11-15）
 
@@ -87,7 +109,7 @@ Current stage: **Milestone 3 monocular lane-following development**. An optional
 - One package: `src/sly_lane_following`. `core.py` handles paint candidates, left/right identities, optical-flow-assisted association and corridor selection; `control.py` retains image-error control; `geometry.py` provides ground projection and visual Pure Pursuit without importing MP workspaces.
 - `node.py` shares the detector with offline analysis. `adapter.py` is the single final command outlet, separately enabled and latched off after faults. It provides Gazebo and PACMod modes; hardware defaults to **observe-only** with unverified configuration.
 - RGB and CameraInfo are the perception inputs. No MP workspace import, recorded vehicle TF, LiDAR/GNSS/IMU fusion or stored-waypoint steering is used; Pure Pursuit uses configured nominal camera geometry.
-- Highbay may use one reliably observed boundary and a previously verified lane width. Both boundaries missing or ambiguous usable sides invalidate control; old centreline points are never replayed as current observations. Ambiguity, stale input or missing feedback stops control; fresh input alone does not re-enable motion.
+- Highbay may use one reliably observed boundary and a previously verified lane width. With the opt-in simulation cache, temporary missing geometry can use a separately labelled, bounded motion-compensated path. Confirmed ambiguity still invalidates control; predicted points never become fresh observations. Ambiguity, stale input or missing feedback stops control; fresh input alone does not re-enable motion.
 - Simulator and e4 configuration are separate. The current simulator is the official **e2 model**, not an e4 vehicle-parameter validation.
 
 | Topic | Meaning |
@@ -429,3 +451,13 @@ python scripts/analyze_real_stages.py --handoff --output results/handoff_review_
 
 
 112.704秒的近侧交接修复：当两个已知单侧目标的近远支持分离，且较近侧通过连续身份、质量和当前冲突检查时，离线交接层可用当前观测更新路径。新增 `path_update_state` / `stop_required` 区分暂时无法更新与停车。781帧局部对比、真实近场冲突合成反例及限制见 `results/handoff112_fix_v1/report.md`；未重跑完整回放，未启用实车续行。
+
+## Night augmentation candidates and reproducibility
+
+The revised dark ambient / dual-headlamp preview was approved on 2026-11-18. All 500 selected originals now have assistant-reviewed labels, frozen into a grouped 350/75/75 split. Training uses 350 original + 350 online low-light examples per epoch; the original and 23%-expanded SimpleENet both start from MP1 epoch20.
+
+See the local [experiment report](results/night_v1/report.md), [500-label audit](results/night_v1/dataset/label_audit/index.html), and [approved lighting preview](results/night_v1/dataset/review/index.html). `dataset/manifest.json` is the authoritative frozen training manifest. No real-night images were collected, so synthetic results do not establish real-night driving readiness.
+
+Both candidates completed early stopping (small: best epoch 28; expanded: best epoch 30). The validation-selected expanded model improves synthetic light/medium IoU by 15.23 percentage points over v3, but loses 2.80 points of original-image recall and slightly increases medium-light background false positives. It remains an optional observation model, not the default. The original-image handoff regression near 112.94 s has now been repaired in the offline handoff layer (see the release results above); this does not change the segmentation metrics or establish real-night performance. The earlier dynamic-low-light replay has not been rerun with this handoff fix.
+
+Training does not alter default v3, lane geometry, Pure Pursuit or Highbay model selection. Both deployment checkpoints and metadata are included under `models/`; see [model selection and limitations](models/README.md). Training tools `scripts/prepare_night_data.py` and `scripts/train_night_lane_net.py` are included, but require the local bag, reviewed labels, frozen manifest and original MP1 checkpoint. A fresh clone alone cannot reproduce training. `results/night_v1/compat/` contains untrained probes; `train_small/` and `train_expanded/` contain local training artifacts. Data, labels, reports, videos and environments are excluded from Git.

@@ -54,9 +54,18 @@ class LaneNode(Node):
             raise ValueError("Unknown controller")
         self.metric_control = control_cfg.get("controller") == "pure_pursuit"
         self.servo = (VisualPurePursuit(control_cfg) if self.metric_control else ImageServo(control_cfg)) if control_file else None
+        self.path_memory=None
+        if control_cfg.get('runtime_path_cache',False):
+            if not self.get_parameter('use_sim_time').value or control_cfg.get('geometry_source')!='official_simulator_wheel_contact_plane':
+                raise ValueError('RUNTIME_CACHE_REQUIRES_HIGHBAY_SIMULATION')
+            if not self.metric_control or self.servo.corridor is None:
+                raise ValueError('RUNTIME_CACHE_REQUIRES_METRIC_CORRIDOR')
+            from .runtime_cache import RuntimePathCache
+            self.path_memory=RuntimePathCache(self.servo.corridor,control_cfg)
+            self.servo.corridor=self.path_memory
         self.adaptive_speed=bool(control_cfg.get('adaptive_speed',False))
         self.speed_feedback=None
-        if self.adaptive_speed:
+        if self.adaptive_speed or self.path_memory:
             from nav_msgs.msg import Odometry
             self.create_subscription(Odometry,'/odom',self.on_speed_feedback,10)
         self.request_pub = self.create_publisher(AckermannDriveStamped, "/sly/control/request", 5) if self.servo else None
@@ -87,6 +96,8 @@ class LaneNode(Node):
 
     def on_speed_feedback(self,msg):
         self.speed_feedback=(msg.header.stamp.sec*1000000000+msg.header.stamp.nanosec,float(msg.twist.twist.linear.x))
+        if self.path_memory:
+            self.path_memory.feedback_sample(self.speed_feedback[0],self.speed_feedback[1],float(msg.twist.twist.angular.z))
 
     def reset_service(self, request, response):
         self.reset()
@@ -178,6 +189,9 @@ class LaneNode(Node):
                     from .speed_profile import single_speed_bound
                     self.servo.cfg['single_speed_bound']=single_speed_bound(self.speed_feedback,self.servo.last_stamp,stamp)
                 control = self.servo.compute(result,raw.shape,stamp,camera) if self.metric_control else self.servo.compute(result,raw.shape,stamp)
+                if control.get('observation_mode')=='predicted_cached_path' and control.get('valid'):
+                    control['speed']=min(control['speed'],.1)
+                    control['reason']='PURE_PURSUIT_CACHED_PATH'
                 result.update({k:control[k] for k in ("metric_valid","metric_reason","metric_path") if k in control})
                 if self.metric_control:
                     cv2.rectangle(debug,(0,29),(debug.shape[1],57),(0,0,0),-1)

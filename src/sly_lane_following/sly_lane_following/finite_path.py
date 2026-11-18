@@ -1,4 +1,6 @@
-"""Bounded, motion-compensated path memory. Experimental; no ROS actuation.
+"""Bounded, motion-compensated path memory; no ROS dependencies.
+
+Highbay may opt in through runtime_cache.py; e4 remains offline-only.
 
 Only observe() stores fresh measured geometry. predict() never renews its age.
 Motion must come from timestamped feedback; hypothetical motion is permitted

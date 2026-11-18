@@ -94,3 +94,65 @@ def test_near_handoff_requires_identity_quality_and_disjoint_support():
    stamp+=1_000_000_000;previous=h.track_known_observations(r,stamp)
   if case=='ambiguous':base=dict(valid=False,reason='AMBIGUOUS_CORRIDOR')
   assert h.known_near_alternative(base,r,g,stamp,CAM,previous,blocked) is None,case
+
+
+def test_verified_fragment_handoff_updates_geometry_role_without_refreshing_width():
+ """A returning side must see the same accepted anchor as the path cache."""
+ from test_single_boundary import single
+ from test_width_history import QUALITY,warm as warm_quality
+ s=warm_quality(QUALITY);h=UnifiedLaneTracker(QUALITY)
+ stamp=2_000_000_000;base=s.compute(straight(),(600,800),stamp,CAM)
+ assert h.step(base,straight(),s.corridor,stamp,CAM,speed=.1,front_angle=0,
+     feedback_stamp=stamp,motion_error_bound_m=0)['valid']
+ last_dual=s.corridor.last_dual;widths=s.corridor.widths.copy()
+ r=single(straight(),'right');r['candidates'][0]['id']=99
+ for j in range(1,4):
+  stamp=2_000_000_000+j*33_333_333
+  o=h.step(dict(valid=False,reason='NO_RELIABLE_SINGLE_BOUNDARY'),r,s.corridor,stamp,CAM,
+      speed=.1,front_angle=0,feedback_stamp=stamp,motion_error_bound_m=0)
+ assert o['valid'] and o['mode']=='observed_handoff'
+ assert h.ids['right']==s.corridor.ids['right']==99
+ assert s.corridor.observed[99][0]==stamp
+ assert s.corridor.last_dual==last_dual and s.corridor.widths==widths
+ # New upstream computation can use the confirmed role without reinitializing.
+ next_base=s.compute(r,(600,800),stamp+33_333_333,CAM)
+ assert next_base['valid'] and next_base['observed_id']==99
+
+
+def test_new_id_not_confirmed_by_one_frame_or_competing_current_edge():
+ from test_single_boundary import single
+ for competing in [False,True]:
+  s=warm(straight());h=UnifiedLaneTracker(CONFIG);stamp=1_300_000_000
+  base=s.compute(straight(),(600,800),stamp,CAM)
+  h.step(base,straight(),s.corridor,stamp,CAM,speed=.1,front_angle=0,feedback_stamp=stamp,motion_error_bound_m=0)
+  r=single(straight(),'right');r['candidates'][0]['id']=99
+  if competing:
+   other=copy.deepcopy(r['candidates'][0]);other['id']=100;r['candidates'].append(other)
+  for j in range(1,5 if competing else 2):
+   stamp+=33_333_333
+   o=h.step(dict(valid=False,reason='NO_RELIABLE_SINGLE_BOUNDARY'),r,s.corridor,stamp,CAM,
+      speed=.1,front_angle=0,feedback_stamp=stamp,motion_error_bound_m=0)
+  assert o['observation_mode']=='predicted_cached_path'
+  assert h.ids['right']==s.corridor.ids['right']==2
+  assert not o.get('identity_commit')
+
+
+def test_current_proposal_cannot_hide_a_real_interior_competitor():
+ s=warm(straight());h=UnifiedLaneTracker(CONFIG);r=straight();stamp=1_300_000_000
+ base=s.compute(r,(600,800),stamp,CAM)
+ h.step(base,r,s.corridor,stamp,CAM,speed=.1,front_angle=0,feedback_stamp=stamp,motion_error_bound_m=0)
+ x=np.linspace(4.5,6.5,30);extra=detection(np.c_[x,x*0+.5],np.c_[x,x*0-1.6])['candidates'][0];extra['id']=99
+ r['candidates'].append(extra);stamp+=33_333_333
+ out=h.step(base,r,s.corridor,stamp,CAM,speed=.1,front_angle=0,feedback_stamp=stamp,motion_error_bound_m=0)
+ assert not out['valid'] and out['reason']=='NEAR_CORRIDOR_CONFLICT'
+ assert out['current_handoff_evidence']['conflict']
+
+
+def test_segment_quality_keeps_far_support_separate_from_role_evidence():
+ from sly_lane_following.handoff import segment_quality
+ s=warm(straight());r=straight()
+ q=segment_quality(r['candidates'],s.corridor,CAM,{'left':1,'right':2})
+ assert {'near','preview'}<={v['band'] for v in q}
+ assert all(v['radius_m'][1]<=7 for v in q if v['band']=='near')
+ assert all(v['radius_m'][0]>7 and v['use']=='confirmed_role_preview_only' for v in q if v['band']=='preview')
+ assert all(v['role_confirmed'] and v['observed_arc_m']>0 for v in q)

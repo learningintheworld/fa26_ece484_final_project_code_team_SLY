@@ -5,7 +5,7 @@
 - Source: `results/enet_real_v3/training/best.pth` (local training artifact).
 - SHA-256: `5b6b3c12d4ba1609a6107f6241a3f42f6ce9a8b7112fcacb436be0960452a547`.
 - Input: grayscale letterbox 640×384, derived from undistorted RGB; use the existing `neural.py` preprocessing.
-- Start commands from the repository root, as the two ENet YAML configurations use `models/enet_v3.pth`.
+- Start commands from the repository root: v3 profiles use `models/enet_v3.pth`; the optional night profile selects its own checkpoint below.
 - Requires compatible PyTorch; default inference uses CUDA. Simulation success is not physical-vehicle validation.
 
 
@@ -27,6 +27,6 @@ The default remains **v3**. `bash scripts/e4.sh vision-night` selects the candid
 | Synthetic light IoU | 79.11% | 89.81% |
 | Synthetic medium IoU | 69.15% | 88.91% |
 
-**Not approved as a default replacement:** original Recall drops 2.80 percentage points; medium-light background false positives rise slightly. The unchanged offline handoff preview also regresses around112.94s on original images (validity85.5%→73.0%), while synthetic dynamic-low-light validity improves78.6%→85.6%. These previews use hypothetical motion, not measured control feedback or vehicle trajectories. Labels are assistant-reviewed, not independent dense human ground truth. No real-night images were available.
+**Not approved as a default replacement:** original Recall drops 2.80 percentage points; medium-light background false positives rise slightly. The earlier original-image handoff regression near 112.94 s has now been repaired in the offline handoff layer: night validity rises from 73.05% to 85.58%, while v3 remains 85.53%. This uses frozen network outputs over all 3,870 frames; it does not change segmentation metrics or the real-vehicle runtime. The earlier synthetic dynamic-low-light validity comparison (v3 78.6%, night 85.6%) has not been rerun with this fix. These previews use hypothetical motion, not measured control feedback or vehicle trajectories. Labels are assistant-reviewed, not independent dense human ground truth. No real-night images were available.
 
 The candidate is provided at the user's request for selectable vehicle observation. Preserve v3 as the fallback; do not equate synthetic results with nighttime driving readiness. `vision-night-cpu` is observation-only in purpose; `diagnose-night` checks the selected candidate, including its metadata. See [vehicle commands](../E4_QUICKSTART_ZH.md) and [AI handoff](../E4_AI_HANDOFF_ZH.md).

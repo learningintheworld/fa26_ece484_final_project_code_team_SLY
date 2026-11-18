@@ -109,7 +109,7 @@ if [[ "${1:-}" == "_inside" ]]; then
       exec ros2 run sly_lane_following lane_node --ros-args -p use_sim_time:=true \
         -p config:="$repo_root/src/sly_lane_following/config/highbay.yaml" \
         -p control_config:="$repo_root/src/sly_lane_following/config/$control_profile" \
-        -p image_topic:=/camera/image_raw -p camera_info_topic:=/camera/camera_info -p reliable_input:=false "$@"
+        -p image_topic:=/camera/image_raw -p camera_info_topic:=/camera/camera_info -p reliable_input:=true "$@"
       ;;
     adapter)
       exec ros2 run sly_lane_following lane_adapter --ros-args -p use_sim_time:=true -p platform:=sim -p dry_run:=false "$@"
