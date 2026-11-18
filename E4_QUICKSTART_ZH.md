@@ -26,16 +26,14 @@ bash scripts/e4.sh build
 
 有本地修改冲突时保留现场修改，不强制reset。环境变化后重跑`setup`；`build`本身不做GPU验收。
 
-若需直接执行构建，在新的Bash终端中只加载Humble和官方驱动，不加载本项目旧安装层：
+只重新构建本地代码（不拉取更新）：
 
 ```bash
 cd ~/sly_public
-unset AMENT_PREFIX_PATH CMAKE_PREFIX_PATH COLCON_PREFIX_PATH ROS_PACKAGE_PATH PYTHONPATH
-unset ROS_DISTRO ROS_VERSION ROS_PYTHON_VERSION
-source /opt/ros/humble/setup.bash
-source "${SLY_DRIVER_WS:-$HOME/gem_ws}/install/setup.bash"
-/usr/bin/colcon build --base-paths src --packages-select sly_lane_following --symlink-install
+bash scripts/e4.sh build
 ```
+
+构建时无需手动执行`unset`、`source`或`colcon`。脚本会清理旧ROS工作空间变量，加载Humble与官方驱动，再只构建本项目；不加载本项目旧安装层，不启动传感器或车辆控制。
 
 ## 2. 每个操作终端：先加载环境
 
