@@ -1,3 +1,8 @@
+# Official reference only: gem_ws gem_gnss_control/pure_pursuit.py.
+# Its brake cap 0.7 is ramped; SLY uses a fixed brake command.
+# Its PID (0.6,0,0.1) and throttle cap 0.5 are not calibrated SLY P-only settings.
+# Measured brake >0.5 is a shift precondition, not a verified brake command.
+# Keep hardware_verified false and unknown values null pending vehicle validation.
 # Populate only after supervised stationary/low-speed checks on this e4.
 hardware_verified: false
 max_speed: 0.2

@@ -19,6 +19,7 @@ class Adapter(Node):
         super().__init__('sly_platform_adapter')
         self.declare_parameter('platform','sim')
         self.declare_parameter('dry_run',True)
+        self.declare_parameter('unverified_observe',False)
         self.declare_parameter('hardware_config','')
         self.declare_parameter('adaptive_speed',False)
         self.platform=self.get_parameter('platform').value
@@ -53,7 +54,10 @@ class Adapter(Node):
             self.gate.max_speed=float(self.cfg.get('max_speed',.2))
             self.gate.max_steering=float(self.cfg.get('max_front_steering',.25))
             if not self.dry and not self.hardware_ready():
-                raise ValueError('Hardware profile unverified: remain dry_run until direction, speed and braking are tested')
+                if not self.get_parameter('unverified_observe').value:
+                    raise ValueError('Hardware profile unverified: remain dry_run until direction, speed and braking are tested')
+                self.dry=True
+                self.get_logger().warning('UNVERIFIED_OBSERVE: hardware profile unverified; no actuator publishers, enable rejected. Restart after verified configuration to use active mode.')
             self.create_subscription(VehicleSpeedRpt,'/pacmod/vehicle_speed_rpt',self.on_speed,10)
             self.create_subscription(GlobalRpt,'/pacmod/global_rpt',self.on_global,10)
             self.create_subscription(SystemRptFloat,'/pacmod/steering_rpt',lambda m:self.report('steering',m),10)

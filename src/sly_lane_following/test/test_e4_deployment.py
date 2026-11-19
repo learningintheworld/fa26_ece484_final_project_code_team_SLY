@@ -180,3 +180,9 @@ def test_night_diagnostic_selection_and_no_project_start(entry):
     p, calls = entry('diagnose-night')
     assert p.returncode == 0 and 'e4_diagnose.py --model night' in calls
     assert 'build ' not in calls and '-m sly_lane_following.node' not in calls
+
+
+def test_drive_requests_explicit_unverified_observation_fallback(entry):
+    p,calls=entry('drive')
+    assert p.returncode==0
+    assert 'dry_run:=false' in calls and 'unverified_observe:=true' in calls

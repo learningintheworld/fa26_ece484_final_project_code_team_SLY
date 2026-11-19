@@ -87,7 +87,7 @@ case "$action" in
     dry_run=true
     [[ "$action" == drive ]] && dry_run=false
     exec "$python_bin" -c 'from sly_lane_following.adapter import main; main()' --ros-args \
-      -p platform:=e4 -p dry_run:="$dry_run" -p hardware_config:="$config/e4_adapter.yaml"
+      -p platform:=e4 -p dry_run:="$dry_run" -p hardware_config:="$config/e4_adapter.yaml" -p unverified_observe:=true
     ;;
   view) exec ros2 run rqt_image_view rqt_image_view /sly/lane/debug_image ;;
   record)
