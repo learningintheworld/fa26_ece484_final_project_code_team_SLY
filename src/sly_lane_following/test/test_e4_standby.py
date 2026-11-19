@@ -30,3 +30,18 @@ def test_unverified_standby_has_no_actuator_publishers_and_cannot_enable(monkeyp
     finally:
         if node is not None:node.destroy_node()
         rclpy.shutdown()
+
+
+def test_observe_does_not_treat_missing_joystick_as_hardware_fault():
+    from types import SimpleNamespace
+    state=SimpleNamespace(override=False,hardware_fault='',platform='e4',bus_fault=False,
+        report_times={k:10. for k in ('global','steering','brake','gear')},
+        joy_time=float('-inf'),deadman=False,dry=True,age_clock=lambda:10.,competing=lambda:False)
+    Adapter.flags(state)
+    assert state.hardware_fault==''
+    state.dry=False
+    Adapter.flags(state)
+    assert state.hardware_fault=='DEADMAN_RELEASED'
+    state.dry=True;state.report_times['brake']=0.
+    Adapter.flags(state)
+    assert state.hardware_fault=='STALE_PACMOD_FEEDBACK'

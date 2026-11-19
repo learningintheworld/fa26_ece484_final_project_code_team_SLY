@@ -1,5 +1,7 @@
 # GEM e4 实车操作
 
+观察模式不要求运行joy：未按手柄或缺少手柄消息仅记录为 `operator_permission`（HELD/RELEASED/INPUT_STALE），不再覆盖主要故障。`operator_permission_required: False` 表示仅观察；主动模式仍要求持续手柄许可，未提供无手柄主动驾驶模式。CAN和反馈故障检查不变。
+
 本版 `bash scripts/e4.sh drive` 在硬件配置未验证时进入 `UNVERIFIED_OBSERVE`：进程继续接收反馈，状态显示 `dry_run: True`，不创建执行器命令发布者，`enable` 被拒绝。中心线恢复或运行中修改YAML均不会自动转为主动模式；现场验证完成后需重新启动。原生主动入口仍默认拒绝未验证配置。
 
 更新：2026-11-18。个人公开仓库目录：`~/sly_public`；车载 Ubuntu 22.04 / ROS Humble。默认仍为 ENet v3；可选 `night` 扩容候选（仅验证合成低光，未验证真实夜间驾驶）。本版更新离线分段质量与身份交接；有限缓存已接入Highbay仿真，但下面的实车入口尚未接入这套交接与续行策略。实车自主车道跟随尚未验收。

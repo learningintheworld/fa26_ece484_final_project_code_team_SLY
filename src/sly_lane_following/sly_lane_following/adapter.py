@@ -118,7 +118,7 @@ class Adapter(Node):
         if self.platform=='e4':
             if self.bus_fault:self.hardware_fault='PACMOD_BUS_FAULT'
             elif any(age-self.report_times.get(k,-math.inf)>.5 for k in ('global','steering','brake','gear')):self.hardware_fault='STALE_PACMOD_FEEDBACK'
-            elif age-self.joy_time>.5 or not self.deadman:self.hardware_fault='DEADMAN_RELEASED'
+            elif not self.dry and (age-self.joy_time>.5 or not self.deadman):self.hardware_fault='DEADMAN_RELEASED'
         return dict(override=blocked,competing=self.competing())
     def gate_input(self):
         # Check both source timestamp and independent receipt age.
@@ -168,6 +168,11 @@ class Adapter(Node):
             values=[KeyValue(key='enabled',value=str(self.gate.enabled)),KeyValue(key='dry_run',value=str(self.dry)),
                     KeyValue(key='speed',value=str(speed)),KeyValue(key='steering',value=str(steering)),
                     KeyValue(key='e4_state',value=self.e4_state)])
+        if self.platform=='e4':
+            age=self.age_clock()-self.joy_time
+            permission='INPUT_STALE' if not 0<=age<=.5 else ('HELD' if self.deadman else 'RELEASED')
+            status.values.extend([KeyValue(key='operator_permission',value=permission),
+                                  KeyValue(key='operator_permission_required',value=str(not self.dry))])
         if self.adaptive:status.values.extend([KeyValue(key='command_acceleration',value=str(acceleration)),KeyValue(key='command_jerk',value=str(jerk))])
         msg=DiagnosticArray(status=[status]);msg.header.stamp=self.get_clock().now().to_msg();self.status_pub.publish(msg)
     def set_e4_state(self,state):
